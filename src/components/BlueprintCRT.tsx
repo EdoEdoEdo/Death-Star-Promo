@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { useAppStore } from '../store/useAppStore';
 import { audio } from '../lib/audio';
+import { isMobile } from '../lib/device';
 
 /**
  * Sezione 4 — Blueprint Death Star (scroll-guided tour).
@@ -24,7 +25,9 @@ const GREEN_DIM = '#0a7a3c';
 const GREEN_MID = '#16cc6c';
 const GREEN_GLOW = 'rgba(34,255,136,0.55)';
 const RED = '#ff3030';
-const DS_MODEL = import.meta.env.BASE_URL + 'models/death_star_4k_opt.glb';
+const DS_MODEL = isMobile
+    ? import.meta.env.BASE_URL + 'models/death_star_2k_opt.glb'
+    : import.meta.env.BASE_URL + 'models/death_star_4k_opt.glb';
 
 const extendLoader = (loader: any) => {
     loader.setMeshoptDecoder(MeshoptDecoder);
@@ -138,6 +141,16 @@ function DSWireframe() {
     const linesGroup = useMemo(() => {
         const group = new THREE.Group();
         const sourceClone = scene.clone(true);
+        // CRITICO: Object3D.clone() copia anche position/rotation/scale.
+        // La scene originale e' condivisa via cache di useGLTF con
+        // DeathStar.tsx, che la centra/scala in useLayoutEffect. Se
+        // DSWireframe gira DOPO DeathStar, il clone eredita quei
+        // transform e finiamo per scalare 2 volte (DS minuscola, laser
+        // sproporzionato). Reset esplicito prima della bbox.
+        sourceClone.position.set(0, 0, 0);
+        sourceClone.rotation.set(0, 0, 0);
+        sourceClone.scale.set(1, 1, 1);
+        sourceClone.updateMatrixWorld(true);
         const bbox0 = new THREE.Box3().setFromObject(sourceClone);
         const size0 = bbox0.getSize(new THREE.Vector3());
         const maxDim = Math.max(size0.x, size0.y, size0.z) || 1;
@@ -842,8 +855,9 @@ export default function BlueprintCRT() {
                                     fontFamily:
                                         '"Star Jedi", Impact, sans-serif',
                                     color: RED,
-                                    textShadow:
-                                        '0 0 14px rgba(255,48,48,0.7), 0 0 32px rgba(255,48,48,0.3)',
+                                    textShadow: isMobile
+                                        ? '0 0 6px rgba(255,48,48,0.35)'
+                                        : '0 0 14px rgba(255,48,48,0.7), 0 0 32px rgba(255,48,48,0.3)',
                                     whiteSpace: 'nowrap',
                                 }}
                             >
@@ -870,8 +884,9 @@ export default function BlueprintCRT() {
                                     fontFamily:
                                         '"Star Jedi", Impact, sans-serif',
                                     color: RED,
-                                    textShadow:
-                                        '0 0 14px rgba(255,48,48,0.7), 0 0 32px rgba(255,48,48,0.3)',
+                                    textShadow: isMobile
+                                        ? '0 0 6px rgba(255,48,48,0.35)'
+                                        : '0 0 14px rgba(255,48,48,0.7), 0 0 32px rgba(255,48,48,0.3)',
                                     whiteSpace: 'nowrap',
                                 }}
                             >

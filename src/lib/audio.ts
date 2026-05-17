@@ -9,6 +9,7 @@
  *  - Globale `muted` (default true): rispetto autoplay browser.
  *    Va sbloccato da una user gesture (es. click su "ENGAGE" del loader).
  */
+import { isMobile } from './device';
 
 interface SoundEntry {
     audio: HTMLAudioElement;
@@ -120,8 +121,26 @@ class AudioManager {
     ): HTMLAudioElement | null {
         const entry = this.sounds.get(id);
         if (!entry || this.muted) return null;
-        const clone = entry.audio.cloneNode(true) as HTMLAudioElement;
-        clone.loop = false;
+        // iOS Safari: lo "sblocco" dato dal play() durante user gesture
+        // vale solo per l'HTMLAudioElement specifico. cloneNode() crea
+        // un nodo nuovo che NON eredita quel permesso -> play() fallisce
+        // silenzioso. Su mobile rinunciamo all'overlap e riusiamo il
+        // nodo originale (gia' primato in unmute()).
+        const clone = isMobile
+            ? entry.audio
+            : (entry.audio.cloneNode(true) as HTMLAudioElement);
+        if (isMobile) {
+            // Reset: il nodo potrebbe essere stato lasciato in pausa
+            // a metaá da un primer / trigger precedente.
+            clone.loop = false;
+            try {
+                clone.currentTime = 0;
+            } catch {
+                /* ignora */
+            }
+        } else {
+            clone.loop = false;
+        }
         clone.volume = Math.max(0, Math.min(1, vol)) * this.masterVolume;
         const start = opts.start ?? 0;
         if (start > 0) {
@@ -168,6 +187,36 @@ class AudioManager {
                 entry.audio.volume = entry.targetVolume * this.masterVolume;
                 if (entry.audio.paused) {
                     entry.audio.play().catch(() => {});
+                }
+            } else {
+                // iOS Safari richiede che ogni HTMLAudioElement riceva
+                // almeno un play() DURANTE il gesture utente per essere
+                // "sbloccato". Senza, i loop ambient e i one-shot
+                // attivati piu' tardi dallo scroll (holo-bg, blu-bg,
+                // saber-hum, ecc.) restano muti silenziosamente.
+                // Primer: .muted = true (HTML attr nativa, taglia output
+                // a livello driver — diverso da volume=0 che lascia
+                // partire qualche ms di audio prima del pause).
+                const el = entry.audio;
+                const wasMuted = el.muted;
+                el.muted = true;
+                el.volume = 0;
+                const p = el.play();
+                const restore = () => {
+                    el.pause();
+                    try {
+                        el.currentTime = entry.loopStart ?? 0;
+                    } catch {
+                        /* ignora */
+                    }
+                    el.muted = wasMuted;
+                };
+                if (p && typeof p.then === 'function') {
+                    p.then(restore).catch(() => {
+                        el.muted = wasMuted;
+                    });
+                } else {
+                    restore();
                 }
             }
         }

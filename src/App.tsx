@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, lazy, Suspense } from 'react';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import { useAppStore } from './store/useAppStore';
 import { useLenisScroll } from './hooks/useLenisScroll';
@@ -10,20 +10,23 @@ import HeroReveal from './components/HeroReveal';
 import FeatureSuperlaser from './components/FeatureSuperlaser';
 import FeatureSpecs from './components/FeatureSpecs';
 import FeatureHyperspace from './components/FeatureHyperspace';
-import FeatureHologram from './components/FeatureHologram';
 import HoloHUD from './components/HoloHUD';
 import SuperlaserHUD from './components/SuperlaserHUD';
 import HyperspaceHUD from './components/HyperspaceHUD';
 import LightsaberHUD from './components/LightsaberHUD';
-import FeatureBlueprint from './components/FeatureBlueprint';
-import FeatureLightsaber from './components/FeatureLightsaber';
 // Varianti del blueprint (sezione 4). Attualmente in uso: BlueprintCRT
 // (terminale Yavin 4 verde fosforico). Per tornare alla versione cyan a
 // griglia, sostituire <BlueprintCRT /> con <BlueprintOverlay /> sotto.
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 import BlueprintOverlay from './components/BlueprintOverlay';
-import BlueprintCRT from './components/BlueprintCRT';
-import LucasChatModal from './components/LucasChatModal';
+// Sezioni tardive caricate in lazy: il loro JS entra in cache solo
+// quando l'utente scrolla abbastanza vicino. Cosi' il bundle iniziale
+// resta piu' leggero (TBT/LCP migliori su mobile).
+const FeatureHologram = lazy(() => import('./components/FeatureHologram'));
+const FeatureBlueprint = lazy(() => import('./components/FeatureBlueprint'));
+const FeatureLightsaber = lazy(() => import('./components/FeatureLightsaber'));
+const BlueprintCRT = lazy(() => import('./components/BlueprintCRT'));
+const LucasChatModal = lazy(() => import('./components/LucasChatModal'));
 import MuteToggle from './components/MuteToggle';
 import FullscreenMenu from './components/FullscreenMenu';
 import VaderIcon from './components/icons/VaderIcon';
@@ -44,113 +47,69 @@ export default function App() {
         }
     }, [loading]);
 
-    // Pre-load audio assets una sola volta. Il browser scarica e tiene
-    // pronti i blob; la riproduzione effettiva richiede prima un user
-    // gesture (sblocco via MuteToggle) per via delle policy autoplay.
+    // Pre-load audio in due ondate: prima i sound necessari per loader +
+    // sezioni 1-2 (engage, crawl, superlaser, hyperspace). Tutto il resto
+    // (holo, blueprint, lightsaber, flyby ships) viene caricato durante
+    // il primo idle del browser per non pesare sul first paint.
     useEffect(() => {
-        audio.load(
-            'hyperspace-warp',
-            import.meta.env.BASE_URL + 'sounds/hyperspace_1.m4a',
-            {
-                loop: true,
-                loopStart: 0,
-                loopEnd: 5,
-            },
-        );
-        audio.load(
-            'hyperspace-boom',
-            import.meta.env.BASE_URL + 'sounds/hyperspace_2.m4a',
-        );
-        audio.load(
-            'vader-breath',
-            import.meta.env.BASE_URL + 'sounds/vader-breath.m4a',
-            {
-                loop: true,
-            },
-        );
-        audio.load(
-            'imperial-march',
-            import.meta.env.BASE_URL + 'sounds/imperial-march.m4a',
-            {
-                loop: true,
-            },
-        );
-        audio.load(
-            'tie-pass',
-            import.meta.env.BASE_URL + 'sounds/tie_fighter.m4a',
-        );
-        audio.load(
-            'xwing-pass',
-            import.meta.env.BASE_URL + 'sounds/x-wing.m4a',
-        );
-        audio.load(
-            'tie-shoot',
-            import.meta.env.BASE_URL + 'sounds/tie-shoot.m4a',
-        );
-        audio.load(
-            'falcon-pass',
-            import.meta.env.BASE_URL + 'sounds/millenium-falcon.m4a',
-        );
-        audio.load(
-            'sd-alarm',
-            import.meta.env.BASE_URL + 'sounds/star-destroyer-alarm.m4a',
-        );
-        audio.load(
-            'shuttle-pass',
-            import.meta.env.BASE_URL + 'sounds/shuttle.m4a',
-        );
-        audio.load(
-            'superlaser',
-            import.meta.env.BASE_URL + 'sounds/superlaser.m4a',
-        );
-        // Holo: switch crew member
-        audio.load(
-            'holo-switch',
-            import.meta.env.BASE_URL + 'sounds/holo-switch.m4a',
-        );
-        // Holo: ambient background della sezione 3 (loop continuo).
-        // loopStart/loopEnd interni alla durata reale (~5s) per evitare
-        // il "click" del loop nativo: riavvolgiamo manualmente prima del
-        // bordo cosi' il rewind avviene senza pause percepibili.
-        audio.load('holo-bg', import.meta.env.BASE_URL + 'sounds/holo-bg.m4a', {
+        const B = import.meta.env.BASE_URL;
+
+        // --- Tier 1: subito (necessari per Loader + sezioni iniziali) ---
+        audio.load('vader-breath', B + 'sounds/vader-breath.m4a', {
             loop: true,
-            loopStart: 0.1,
-            loopEnd: 4.7,
         });
-        // Holo: accensione/spegnimento del proiettore
-        audio.load(
-            'holo-turn',
-            import.meta.env.BASE_URL + 'sounds/holo-turn.m4a',
-        );
-        // Blueprint: apertura/chiusura (one-shot ai due wipe)
-        audio.load(
-            'blu-turn',
-            import.meta.env.BASE_URL + 'sounds/blu-turn.m4a',
-        );
-        // Blueprint: bg ambient in loop continuo (~15s clip).
-        audio.load('blu-bg', import.meta.env.BASE_URL + 'sounds/blu-bg.m4a', {
+        audio.load('imperial-march', B + 'sounds/imperial-march.m4a', {
             loop: true,
-            loopStart: 0.1,
-            loopEnd: 14.7,
         });
-        // Lightsaber: stesso file, 3 ID per le 3 fasi (ignite / hum / close)
-        audio.load(
-            'saber-ignite',
-            import.meta.env.BASE_URL + 'sounds/darth_vader_lightsaber.m4a',
-        );
-        audio.load(
-            'saber-hum',
-            import.meta.env.BASE_URL + 'sounds/darth_vader_lightsaber.m4a',
-            {
+        audio.load('superlaser', B + 'sounds/superlaser.m4a');
+        audio.load('hyperspace-warp', B + 'sounds/hyperspace_1.m4a', {
+            loop: true,
+            loopStart: 0,
+            loopEnd: 5,
+        });
+        audio.load('hyperspace-boom', B + 'sounds/hyperspace_2.m4a');
+
+        // --- Tier 2: differito (flyby + sezioni successive) ---
+        const loadTier2 = () => {
+            audio.load('tie-pass', B + 'sounds/tie_fighter.m4a');
+            audio.load('xwing-pass', B + 'sounds/x-wing.m4a');
+            audio.load('tie-shoot', B + 'sounds/tie-shoot.m4a');
+            audio.load('falcon-pass', B + 'sounds/millenium-falcon.m4a');
+            audio.load('sd-alarm', B + 'sounds/star-destroyer-alarm.m4a');
+            audio.load('shuttle-pass', B + 'sounds/shuttle.m4a');
+            audio.load('holo-switch', B + 'sounds/holo-switch.m4a');
+            audio.load('holo-bg', B + 'sounds/holo-bg.m4a', {
+                loop: true,
+                loopStart: 0.1,
+                loopEnd: 4.7,
+            });
+            audio.load('holo-turn', B + 'sounds/holo-turn.m4a');
+            audio.load('blu-turn', B + 'sounds/blu-turn.m4a');
+            audio.load('blu-bg', B + 'sounds/blu-bg.m4a', {
+                loop: true,
+                loopStart: 0.1,
+                loopEnd: 14.7,
+            });
+            audio.load('saber-ignite', B + 'sounds/darth_vader_lightsaber.m4a');
+            audio.load('saber-hum', B + 'sounds/darth_vader_lightsaber.m4a', {
                 loop: true,
                 loopStart: 3,
                 loopEnd: 12,
-            },
-        );
-        audio.load(
-            'saber-close',
-            import.meta.env.BASE_URL + 'sounds/darth_vader_lightsaber.m4a',
-        );
+            });
+            audio.load('saber-close', B + 'sounds/darth_vader_lightsaber.m4a');
+        };
+
+        const w = window as Window & {
+            requestIdleCallback?: (
+                cb: () => void,
+                opts?: { timeout: number },
+            ) => number;
+        };
+        if (typeof w.requestIdleCallback === 'function') {
+            w.requestIdleCallback(loadTier2, { timeout: 2500 });
+        } else {
+            setTimeout(loadTier2, 1500);
+        }
     }, []);
 
     // Quando il loader sparisce, fade out del respiro di Vader (resta
@@ -238,17 +197,25 @@ export default function App() {
                     <FeatureHyperspace />
                 </div>
                 <div id="feat-hologram">
-                    <FeatureHologram />
+                    <Suspense fallback={null}>
+                        <FeatureHologram />
+                    </Suspense>
                 </div>
                 <div id="feat-blueprint">
-                    <FeatureBlueprint />
+                    <Suspense fallback={null}>
+                        <FeatureBlueprint />
+                    </Suspense>
                 </div>
                 <div id="feat-lightsaber">
-                    <FeatureLightsaber />
+                    <Suspense fallback={null}>
+                        <FeatureLightsaber />
+                    </Suspense>
                 </div>
             </main>
 
-            <BlueprintCRT />
+            <Suspense fallback={null}>
+                <BlueprintCRT />
+            </Suspense>
             {/* <BlueprintOverlay />  ← variante precedente, blueprint cyan */}
             {/* Reference noop per tenere l'import vivo senza errori TS: */}
             {false && <BlueprintOverlay />}
@@ -256,7 +223,9 @@ export default function App() {
             <SuperlaserHUD />
             <HyperspaceHUD />
             <LightsaberHUD />
-            <LucasChatModal />
+            <Suspense fallback={null}>
+                <LucasChatModal />
+            </Suspense>
             <FullscreenMenu />
         </>
     );

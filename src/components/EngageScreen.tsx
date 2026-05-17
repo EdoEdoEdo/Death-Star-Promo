@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useAppStore } from '../store/useAppStore';
 import { audio } from '../lib/audio';
+import { isMobile } from '../lib/device';
 
 /**
  * Schermata "ENGAGE" mostrata prima del Loader.
@@ -53,8 +54,9 @@ export default function EngageScreen() {
                         fontSize: 'clamp(2.5rem, 9vw, 7rem)',
                         color: '#000',
                         WebkitTextStroke: '2px #FFE81F',
-                        textShadow:
-                            '0 0 18px rgba(255,232,31,0.45), 0 0 38px rgba(255,232,31,0.18)',
+                        textShadow: isMobile
+                            ? '0 0 8px rgba(255,232,31,0.22)'
+                            : '0 0 18px rgba(255,232,31,0.45), 0 0 38px rgba(255,232,31,0.18)',
                         letterSpacing: '0.02em',
                         // Star Jedi: glifi MINUSCOLI = forme classiche da logo SW.
                         // Le maiuscole hanno glifi alternativi (es. O -> forma a N).

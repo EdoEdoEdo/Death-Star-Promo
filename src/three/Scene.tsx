@@ -11,6 +11,7 @@ import HoloRoom from './HoloRoom';
 import Lightsaber from './Lightsaber';
 import { useAppStore } from '../store/useAppStore';
 import { audio } from '../lib/audio';
+import { isMobile } from '../lib/device';
 
 type Key = {
     p: number;
@@ -297,10 +298,11 @@ export default function Scene() {
     return (
         <div className="fixed inset-0 -z-0 pointer-events-none">
             <Canvas
-                dpr={[1, 1.6]}
+                dpr={isMobile ? [1, 1.2] : [1, 1.6]}
                 gl={{
-                    antialias: true,
+                    antialias: !isMobile,
                     alpha: true,
+                    powerPreference: 'high-performance',
                     toneMapping: THREE.ACESFilmicToneMapping,
                     toneMappingExposure: 1.15,
                 }}
@@ -335,7 +337,7 @@ export default function Scene() {
                         <Stars
                             radius={50}
                             depth={30}
-                            count={6000}
+                            count={isMobile ? 2500 : 6000}
                             factor={3.5}
                             saturation={0}
                             fade
@@ -344,7 +346,7 @@ export default function Scene() {
                         <Stars
                             radius={28}
                             depth={12}
-                            count={2200}
+                            count={isMobile ? 900 : 2200}
                             factor={1.8}
                             saturation={0}
                             fade
@@ -367,15 +369,31 @@ export default function Scene() {
                 <RevealApproach dsRef={dsRef} />
                 <HyperspaceTransition dsRef={dsRef} starsRef={starsRef} />
 
-                <EffectComposer>
-                    <Bloom
-                        intensity={0.85}
-                        luminanceThreshold={0.45}
-                        luminanceSmoothing={0.3}
-                        mipmapBlur
-                    />
-                    <Vignette eskil={false} offset={0.2} darkness={0.82} />
-                </EffectComposer>
+                {/* Postprocessing: su mobile teniamo SOLO il bloom senza
+                    mipmapBlur (la versione "lite") perche' le materiali
+                    della scena sono tarate con il bloom attivo: senza,
+                    DS/ships/blade/holo risultano quasi invisibili contro
+                    lo sfondo navy. Vignette via su mobile per risparmiare. */}
+                {isMobile ? (
+                    <EffectComposer>
+                        <Bloom
+                            intensity={0.6}
+                            luminanceThreshold={0.45}
+                            luminanceSmoothing={0.3}
+                            mipmapBlur={false}
+                        />
+                    </EffectComposer>
+                ) : (
+                    <EffectComposer>
+                        <Bloom
+                            intensity={0.85}
+                            luminanceThreshold={0.45}
+                            luminanceSmoothing={0.3}
+                            mipmapBlur
+                        />
+                        <Vignette eskil={false} offset={0.2} darkness={0.82} />
+                    </EffectComposer>
+                )}
             </Canvas>
         </div>
     );

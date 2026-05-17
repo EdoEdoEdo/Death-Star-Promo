@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useLayoutEffect, useMemo, useRef } from 'react';
 import { useGLTF } from '@react-three/drei';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
@@ -10,7 +10,8 @@ const extendLoader = (loader: any) => {
     loader.setMeshoptDecoder(MeshoptDecoder);
 };
 
-const LIGHTSABER_URL = import.meta.env.BASE_URL + 'models/darth_vader_lightsaber_opt.glb';
+const LIGHTSABER_URL =
+    import.meta.env.BASE_URL + 'models/darth_vader_lightsaber_opt.glb';
 
 // ──────────────────────────────────────────────────────────────
 // PARAMETRI TUNABILI
@@ -111,8 +112,11 @@ export default function Lightsaber() {
     const bladeAxis = useRef(new THREE.Vector3(0, 1, 0));
     const bladeEmitter = useRef(new THREE.Vector3(0, 0, 0));
 
-    // Setup hilt: rotazione, scala uniforme, centratura, calcolo emitter
-    useEffect(() => {
+    // Setup hilt: rotazione, scala uniforme, centratura, calcolo emitter.
+    // useLayoutEffect per coerenza con DeathStar/HoloRoom/Loader: la
+    // normalizzazione avviene prima del primo paint, niente flash di un
+    // frame con scale residue dalla cache di useGLTF.
+    useLayoutEffect(() => {
         hilt.position.set(0, 0, 0);
         hilt.scale.setScalar(1);
         hilt.rotation.set(HILT_ROTATION[0], HILT_ROTATION[1], HILT_ROTATION[2]);

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useLayoutEffect, useMemo, useRef } from 'react';
 import { useGLTF } from '@react-three/drei';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
@@ -35,13 +35,21 @@ const SLOTS: Slot[] = [
         yOffset: 0,
     },
     {
-        url: import.meta.env.BASE_URL + 'models/r5-j2_imperial_astromech_droid_opt.glb',
+        url:
+            import.meta.env.BASE_URL +
+            'models/r5-j2_imperial_astromech_droid_opt.glb',
         scale: 1.4,
         yOffset: 0,
     },
-    { url: import.meta.env.BASE_URL + 'models/star_wars_mouse_droid_opt.glb', scale: 0.9, yOffset: 0 },
     {
-        url: import.meta.env.BASE_URL + 'models/star_wars_b1_battle_droid_opt.glb',
+        url: import.meta.env.BASE_URL + 'models/star_wars_mouse_droid_opt.glb',
+        scale: 0.9,
+        yOffset: 0,
+    },
+    {
+        url:
+            import.meta.env.BASE_URL +
+            'models/star_wars_b1_battle_droid_opt.glb',
         scale: 1.6,
         yOffset: 0,
     },
@@ -153,7 +161,7 @@ function HoloSlot({
         [],
     );
 
-    useEffect(() => {
+    useLayoutEffect(() => {
         // Step 1: applico rotationFix DIRETTAMENTE sulla scena root,
         // PRIMA di calcolare bbox / center / scale. Così la box è
         // già quella del modello orientato correttamente.
@@ -343,8 +351,16 @@ export default function HoloRoom() {
     const beamOnRef = useRef(false);
     const { scene: puck } = useGLTF(PUCK, undefined, undefined, extendLoader);
 
-    // Normalizza puck (centro alla base, scala max=1.6)
-    useEffect(() => {
+    // Normalizza puck (centro alla base, scala max=1.6).
+    // useLayoutEffect: applica scale prima del primo paint, altrimenti
+    // un frame col puck non normalizzato puo' sfuggire. Reset esplicito
+    // per garantire idempotenza (StrictMode / HMR / scene cached da drei).
+    useLayoutEffect(() => {
+        puck.position.set(0, 0, 0);
+        puck.rotation.set(0, 0, 0);
+        puck.scale.set(1, 1, 1);
+        puck.updateMatrixWorld(true);
+
         const box = new THREE.Box3().setFromObject(puck);
         const size = box.getSize(new THREE.Vector3());
         const center = box.getCenter(new THREE.Vector3());

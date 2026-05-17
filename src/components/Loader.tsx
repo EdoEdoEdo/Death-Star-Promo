@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, Suspense } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, Suspense } from 'react';
 import { useProgress, useGLTF } from '@react-three/drei';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import {
@@ -31,7 +31,11 @@ function VaderHelmet() {
     const { scene } = useGLTF(VADER);
     const processedRef = useRef(false);
 
-    useEffect(() => {
+    // useLayoutEffect: la normalizzazione (scale + center) DEVE
+    // avvenire prima del primo paint, altrimenti vediamo un frame con
+    // il casco gigante/decentrato (visibile soprattutto su refresh
+    // "caldo" dove il glb arriva dal disk cache istantaneamente).
+    useLayoutEffect(() => {
         // Doppio guard:
         //  - processedRef evita la doppia esecuzione in StrictMode dello stesso mount
         //  - processedScenes (modulo) evita di riapplicare se la scena è cached
@@ -42,6 +46,14 @@ function VaderHelmet() {
         }
         processedRef.current = true;
         processedScenes.add(scene);
+
+        // Reset esplicito a stato neutro: garantisce idempotenza e
+        // bbox calcolata su trasformazioni "pulite" (no residui da
+        // mount precedenti / hot reload).
+        scene.position.set(0, 0, 0);
+        scene.rotation.set(0, 0, 0);
+        scene.scale.set(1, 1, 1);
+        scene.updateMatrixWorld(true);
 
         // Ordine corretto: SCALE prima, poi ricalcolo bbox e CENTER.
         // Se traslassimo prima, la scala successiva moltiplicherebbe
