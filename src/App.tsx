@@ -47,14 +47,19 @@ export default function App() {
         }
     }, [loading]);
 
-    // Pre-load audio in due ondate: prima i sound necessari per loader +
-    // sezioni 1-2 (engage, crawl, superlaser, hyperspace). Tutto il resto
-    // (holo, blueprint, lightsaber, flyby ships) viene caricato durante
-    // il primo idle del browser per non pesare sul first paint.
+    // Pre-load audio: TUTTI gli HTMLAudioElement vanno creati prima del
+    // click di ENGAGE perche' iOS Safari/Chrome richiede che ogni nodo
+    // riceva almeno un play() DURANTE lo stesso user gesture per essere
+    // sbloccato. Il lazy loading via requestIdleCallback creerebbe nodi
+    // DOPO il gesture -> rimangono muti silenziosamente e su Chrome iOS
+    // capita che il browser li "rilasci" tutti insieme a un gesture
+    // successivo, generando un coro indesiderato.
+    // Performance: gli audio sono ~3MB totali, preload='auto' li scarica
+    // in parallelo con priorita' bassa durante il Loader. Impatto sul
+    // first paint trascurabile.
     useEffect(() => {
         const B = import.meta.env.BASE_URL;
 
-        // --- Tier 1: subito (necessari per Loader + sezioni iniziali) ---
         audio.load('vader-breath', B + 'sounds/vader-breath.m4a', {
             loop: true,
         });
@@ -68,48 +73,32 @@ export default function App() {
             loopEnd: 5,
         });
         audio.load('hyperspace-boom', B + 'sounds/hyperspace_2.m4a');
-
-        // --- Tier 2: differito (flyby + sezioni successive) ---
-        const loadTier2 = () => {
-            audio.load('tie-pass', B + 'sounds/tie_fighter.m4a');
-            audio.load('xwing-pass', B + 'sounds/x-wing.m4a');
-            audio.load('tie-shoot', B + 'sounds/tie-shoot.m4a');
-            audio.load('falcon-pass', B + 'sounds/millenium-falcon.m4a');
-            audio.load('sd-alarm', B + 'sounds/star-destroyer-alarm.m4a');
-            audio.load('shuttle-pass', B + 'sounds/shuttle.m4a');
-            audio.load('holo-switch', B + 'sounds/holo-switch.m4a');
-            audio.load('holo-bg', B + 'sounds/holo-bg.m4a', {
-                loop: true,
-                loopStart: 0.1,
-                loopEnd: 4.7,
-            });
-            audio.load('holo-turn', B + 'sounds/holo-turn.m4a');
-            audio.load('blu-turn', B + 'sounds/blu-turn.m4a');
-            audio.load('blu-bg', B + 'sounds/blu-bg.m4a', {
-                loop: true,
-                loopStart: 0.1,
-                loopEnd: 14.7,
-            });
-            audio.load('saber-ignite', B + 'sounds/darth_vader_lightsaber.m4a');
-            audio.load('saber-hum', B + 'sounds/darth_vader_lightsaber.m4a', {
-                loop: true,
-                loopStart: 3,
-                loopEnd: 12,
-            });
-            audio.load('saber-close', B + 'sounds/darth_vader_lightsaber.m4a');
-        };
-
-        const w = window as Window & {
-            requestIdleCallback?: (
-                cb: () => void,
-                opts?: { timeout: number },
-            ) => number;
-        };
-        if (typeof w.requestIdleCallback === 'function') {
-            w.requestIdleCallback(loadTier2, { timeout: 2500 });
-        } else {
-            setTimeout(loadTier2, 1500);
-        }
+        audio.load('tie-pass', B + 'sounds/tie_fighter.m4a');
+        audio.load('xwing-pass', B + 'sounds/x-wing.m4a');
+        audio.load('tie-shoot', B + 'sounds/tie-shoot.m4a');
+        audio.load('falcon-pass', B + 'sounds/millenium-falcon.m4a');
+        audio.load('sd-alarm', B + 'sounds/star-destroyer-alarm.m4a');
+        audio.load('shuttle-pass', B + 'sounds/shuttle.m4a');
+        audio.load('holo-switch', B + 'sounds/holo-switch.m4a');
+        audio.load('holo-bg', B + 'sounds/holo-bg.m4a', {
+            loop: true,
+            loopStart: 0.1,
+            loopEnd: 4.7,
+        });
+        audio.load('holo-turn', B + 'sounds/holo-turn.m4a');
+        audio.load('blu-turn', B + 'sounds/blu-turn.m4a');
+        audio.load('blu-bg', B + 'sounds/blu-bg.m4a', {
+            loop: true,
+            loopStart: 0.1,
+            loopEnd: 14.7,
+        });
+        audio.load('saber-ignite', B + 'sounds/darth_vader_lightsaber.m4a');
+        audio.load('saber-hum', B + 'sounds/darth_vader_lightsaber.m4a', {
+            loop: true,
+            loopStart: 3,
+            loopEnd: 12,
+        });
+        audio.load('saber-close', B + 'sounds/darth_vader_lightsaber.m4a');
     }, []);
 
     // Quando il loader sparisce, fade out del respiro di Vader (resta

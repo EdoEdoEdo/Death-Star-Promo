@@ -30,10 +30,13 @@ export default function EngageScreen() {
     if (hidden) return null;
 
     function handleEngage() {
-        // 1. Sblocca audio (richiede user gesture)
-        audio.unmute();
-        // 2. Avvia respiro Vader in loop a volume basso (immersivo, non invasivo)
+        // 1. Pre-setta il target volume del respiro Vader PRIMA dell'unmute,
+        //    cosi' unmute() lo riconosce come "loop attivo" e lo avvia
+        //    direttamente, saltando il primer iOS che farebbe play+pause
+        //    causando una race condition (silenzio nel loader).
         audio.setVolume('vader-breath', 0.55);
+        // 2. Sblocca audio (richiede user gesture) -> avvia vader-breath
+        audio.unmute();
         // 3. Segnala allo store
         setEngaged(true);
     }

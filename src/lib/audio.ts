@@ -189,35 +189,43 @@ class AudioManager {
                     entry.audio.play().catch(() => {});
                 }
             } else {
-                // iOS Safari richiede che ogni HTMLAudioElement riceva
-                // almeno un play() DURANTE il gesture utente per essere
-                // "sbloccato". Senza, i loop ambient e i one-shot
-                // attivati piu' tardi dallo scroll (holo-bg, blu-bg,
-                // saber-hum, ecc.) restano muti silenziosamente.
-                // Primer: .muted = true (HTML attr nativa, taglia output
-                // a livello driver — diverso da volume=0 che lascia
-                // partire qualche ms di audio prima del pause).
+                // iOS Safari/Chrome iOS richiedono che ogni
+                // HTMLAudioElement riceva un play() DURANTE il gesture
+                // utente per essere sbloccato. Senza, i loop ambient e
+                // i one-shot attivati piu' tardi dallo scroll restano
+                // muti silenziosamente (NotAllowedError), e in alcuni
+                // casi Chrome iOS li "rilascia" tutti insieme a un
+                // gesture successivo -> coro indesiderato.
+                //
+                // Primer SINCRONO: play() + pause() nello stesso tick.
+                // Il pause arriva prima che il browser produca audio.
+                // .muted = true e' un ulteriore safety net a livello
+                // driver. Non aspettiamo la promise di play() perche'
+                // su cache fredda potrebbe risolvere molto dopo, e nel
+                // mezzo il browser potrebbe iniziare a suonare.
                 const el = entry.audio;
                 const wasMuted = el.muted;
                 el.muted = true;
                 el.volume = 0;
-                const p = el.play();
-                const restore = () => {
+                try {
+                    const p = el.play();
+                    // Pause sincrono immediato. Su Chromium-based,
+                    // play() torna una Promise ma il media element e'
+                    // gia' in stato playing; pause() lo ferma subito.
                     el.pause();
                     try {
                         el.currentTime = entry.loopStart ?? 0;
                     } catch {
                         /* ignora */
                     }
-                    el.muted = wasMuted;
-                };
-                if (p && typeof p.then === 'function') {
-                    p.then(restore).catch(() => {
-                        el.muted = wasMuted;
-                    });
-                } else {
-                    restore();
+                    // Cattura la rejection per evitare unhandled promise.
+                    if (p && typeof p.catch === 'function') {
+                        p.catch(() => {});
+                    }
+                } catch {
+                    /* ignora errori di play sincroni */
                 }
+                el.muted = wasMuted;
             }
         }
         this.notify();

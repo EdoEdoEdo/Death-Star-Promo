@@ -9,11 +9,27 @@ gsap.registerPlugin(ScrollTrigger);
 /**
  * Inizializza Lenis e lo collega a GSAP ScrollTrigger.
  * Da chiamare in un useEffect a livello di App.
+ *
+ * Mentre `loading` e' true (EngageScreen + Loader visibili) lo scroll
+ * e' completamente bloccato: niente Lenis attivo, niente scroll nativo
+ * (overflow:hidden sul body via classe). Cosi' l'utente non puo' "sbirciare"
+ * sotto il loader ne' attivare ScrollTrigger prima del tempo.
  */
 export function useLenisScroll() {
     const setScrollProgress = useAppStore((s) => s.setScrollProgress);
+    const loading = useAppStore((s) => s.loading);
 
     useEffect(() => {
+        if (loading) {
+            // Blocco totale: scroll nativo off via CSS, Lenis non inizializzato.
+            document.documentElement.classList.add('scroll-locked');
+            document.body.classList.add('scroll-locked');
+            return () => {
+                document.documentElement.classList.remove('scroll-locked');
+                document.body.classList.remove('scroll-locked');
+            };
+        }
+
         const lenis = new Lenis({
             // Durata maggiore = scroll più "lungo"/inerzia più dolce.
             duration: 1.8,
@@ -45,5 +61,5 @@ export function useLenisScroll() {
             gsap.ticker.remove(raf);
             lenis.destroy();
         };
-    }, [setScrollProgress]);
+    }, [setScrollProgress, loading]);
 }

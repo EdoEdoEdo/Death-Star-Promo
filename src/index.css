@@ -2,6 +2,17 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Blocco scroll durante Engage + Loader. Applicato via classe da
+   useLenisScroll quando loading=true. overscroll-behavior: none su iOS
+   per evitare il rubber-banding tipico. touch-action: none disabilita
+   anche il pan/zoom di sistema. */
+html.scroll-locked,
+body.scroll-locked {
+    overflow: hidden !important;
+    overscroll-behavior: none;
+    touch-action: none;
+}
+
 /* ======================== Star Jedi (logo SW) ======================== */
 @font-face {
     font-family: 'Star Jedi';
