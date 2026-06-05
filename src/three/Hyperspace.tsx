@@ -3,6 +3,7 @@ import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useAppStore } from '../store/useAppStore';
 import { audio } from '../lib/audio';
+import { isMobile } from '../lib/device';
 
 /**
  * Hyperspace "warp speed" effect in stile film Star Wars.
@@ -21,7 +22,11 @@ import { audio } from '../lib/audio';
  *   0.85 - 1.00 : decelerazione, tornano puntini
  */
 
-const STAR_COUNT = 1800;
+// Mobile: ~60% in meno di stelle. L'effetto warp resta denso visivamente
+// (le strisce coprono parecchio spazio anche con count ridotto) ma
+// scarichiamo la per-frame loop che aggiorna tutti i vertici via JS
+// (CPU bound) + il vertex throughput su GPU.
+const STAR_COUNT = isMobile ? 700 : 1800;
 const RADIUS_MAX = 22; // raggio max dell'imbuto in cui spawnano
 const Z_NEAR = -2; // davanti alla camera (locale)
 const Z_FAR = -160; // lontano davanti alla camera (locale)

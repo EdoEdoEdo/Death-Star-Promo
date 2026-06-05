@@ -53,8 +53,10 @@ export default function DeathStar(props: JSX.IntrinsicElements['group']) {
         scene.traverse((obj) => {
             const m = obj as THREE.Mesh;
             if (m.isMesh) {
-                m.castShadow = true;
-                m.receiveShadow = true;
+                // Nessun shadow-caster nella scena: flag inutili e costose
+                // (consumano un pass extra di matrix update per frame).
+                m.castShadow = false;
+                m.receiveShadow = false;
                 const mat = m.material as THREE.MeshStandardMaterial;
                 if (mat) {
                     if ('envMapIntensity' in mat) mat.envMapIntensity = 0.3;

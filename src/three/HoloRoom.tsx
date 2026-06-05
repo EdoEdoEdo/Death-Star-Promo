@@ -5,10 +5,17 @@ import * as THREE from 'three';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { useAppStore } from '../store/useAppStore';
 import { audio } from '../lib/audio';
+import { isMobile } from '../lib/device';
 
 const extendLoader = (loader: any) => {
     loader.setMeshoptDecoder(MeshoptDecoder);
 };
+
+// Scala globale della stanza olografica: su mobile il viewport e' stretto
+// e il modello+puck+beam riempivano lo schermo invadendo la card di testo
+// sotto. Riducendo l'intero gruppo (puck, beam, ologramma, rim glow) di
+// ~22% la composizione resta identica ma piu' compatta.
+const HOLO_SCALE = isMobile ? 0.78 : 1;
 
 // ───────────────────────── Modelli ─────────────────────────
 const PUCK = import.meta.env.BASE_URL + 'models/holo-puck_opt.glb';
@@ -411,7 +418,7 @@ export default function HoloRoom() {
         const bootIn = THREE.MathUtils.smoothstep(hp, 0.0, 0.1);
         // Shutdown del cono: 0.85..0.93 (anticipato e accelerato), cosi'
         // il proiettore e' spento PRIMA che parta il wipe-in del blueprint
-        // (che inizia a hp >= 0.95 in BlueprintOverlay.tsx).
+        // (che inizia a hp >= 0.95 in BlueprintCRT.tsx).
         const shutdown = 1 - THREE.MathUtils.smoothstep(hp, 0.85, 0.93);
         // Spegnimento extra durante la transizione blueprint
         const bpFade = 1 - THREE.MathUtils.smoothstep(bp, 0.0, 0.15);
@@ -491,7 +498,7 @@ export default function HoloRoom() {
 
     // Posiziono la stanza nel vuoto post-iperspazio (centro origine).
     return (
-        <group ref={groupRef} visible={false}>
+        <group ref={groupRef} visible={false} scale={HOLO_SCALE}>
             {/* Puck proiettore in basso */}
             <primitive object={puck} />
             {/* Beam che sale dal puck */}

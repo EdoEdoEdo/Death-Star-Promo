@@ -78,13 +78,13 @@ export default function Cursor() {
             <div
                 ref={dotRef}
                 aria-hidden
-                className="cursor-dot pointer-events-none fixed top-0 left-0 z-[200] h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-sith-red mix-blend-difference"
+                className="cursor-dot pointer-events-none fixed top-0 left-0 z-[210] h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-sith-red mix-blend-difference"
                 style={{ willChange: 'transform' }}
             />
             <div
                 ref={ringRef}
                 aria-hidden
-                className="cursor-ring pointer-events-none fixed top-0 left-0 z-[199] h-9 w-9 rounded-full border border-sith-red/50 mix-blend-difference"
+                className="cursor-ring pointer-events-none fixed top-0 left-0 z-[209] h-9 w-9 rounded-full border border-sith-red/50 mix-blend-difference"
                 style={{ willChange: 'transform' }}
             />
         </>

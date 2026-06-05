@@ -14,11 +14,6 @@ import HoloHUD from './components/HoloHUD';
 import SuperlaserHUD from './components/SuperlaserHUD';
 import HyperspaceHUD from './components/HyperspaceHUD';
 import LightsaberHUD from './components/LightsaberHUD';
-// Varianti del blueprint (sezione 4). Attualmente in uso: BlueprintCRT
-// (terminale Yavin 4 verde fosforico). Per tornare alla versione cyan a
-// griglia, sostituire <BlueprintCRT /> con <BlueprintOverlay /> sotto.
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-import BlueprintOverlay from './components/BlueprintOverlay';
 // Sezioni tardive caricate in lazy: il loro JS entra in cache solo
 // quando l'utente scrolla abbastanza vicino. Cosi' il bundle iniziale
 // resta piu' leggero (TBT/LCP migliori su mobile).
@@ -105,10 +100,13 @@ export default function App() {
     // un eco molto basso fino al crawl, poi muto).
     useEffect(() => {
         if (!loading) {
-            // fade graduale a 0 in ~3s
+            // fade graduale a 0 in ~4.6s: durata di un ciclo completo
+            // della CSS animation `vader-breath` (4.6s ease-in-out),
+            // cosi' il volume si esaurisce attraversando un respiro
+            // intero invece di tagliarsi a meta'.
             const start = Date.now();
             const id = window.setInterval(() => {
-                const t = Math.min(1, (Date.now() - start) / 3000);
+                const t = Math.min(1, (Date.now() - start) / 4600);
                 audio.setVolume('vader-breath', 0.55 * (1 - t));
                 if (t >= 1) window.clearInterval(id);
             }, 100);
@@ -205,9 +203,6 @@ export default function App() {
             <Suspense fallback={null}>
                 <BlueprintCRT />
             </Suspense>
-            {/* <BlueprintOverlay />  ← variante precedente, blueprint cyan */}
-            {/* Reference noop per tenere l'import vivo senza errori TS: */}
-            {false && <BlueprintOverlay />}
             <HoloHUD />
             <SuperlaserHUD />
             <HyperspaceHUD />

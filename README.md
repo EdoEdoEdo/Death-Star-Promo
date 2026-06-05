@@ -71,8 +71,7 @@ src/
     FeatureHologram.tsx         # phase 4 scroll-driver + HoloHUD
     FeatureBlueprint.tsx        # phase 5 scroll-driver + BlueprintCRT
     FeatureLightsaber.tsx       # phase 6 scroll-driver + LightsaberHUD
-    BlueprintCRT.tsx            # green-phosphor terminal (active variant)
-    BlueprintOverlay.tsx        # cyan variant (deprecated, kept for reference)
+    BlueprintCRT.tsx            # green-phosphor terminal
     FullscreenMenu.tsx          # fullscreen menu with top-down clip wipe
     LucasChatModal.tsx          # AI chat modal
     MuteToggle.tsx              # inline header audio toggle
@@ -116,6 +115,58 @@ The fullscreen menu:
   position.
 - Provides an "OPEN HOLOCRON" shortcut at the bottom for the chat.
 - `Esc` or the X at the top to close.
+
+## Master Lucas — AI chat
+
+The "OPEN HOLOCRON" / Vader-menu shortcut opens a chat with **Master
+Lucas**, an AI persona that answers questions about the Star Wars universe
+in a slightly grandiose, in-character tone.
+
+How it works:
+
+- **LLM** — [Groq](https://console.groq.com/) hosts Llama 3.3 70B; calls go
+  through a tiny PHP proxy in [`api/groq.php`](api/groq.php) so the API key
+  is never exposed to the browser. The system prompt lives in
+  [`src/lib/groq.ts`](src/lib/groq.ts).
+- **Knowledge grounding** — instead of relying solely on the model's
+  training, the chat runs a lightweight keyword-based retrieval step
+  (`gatherSwapiContext` in [`src/lib/groq.ts`](src/lib/groq.ts)): the user
+  message is matched against a set of regex patterns to detect intents
+  (planets, films, characters, starships, vehicles, species), the relevant
+  canonical records are fetched from [SWAPI](https://swapi.info) via
+  [`src/lib/swapi.ts`](src/lib/swapi.ts), and the results are injected into
+  the system prompt as grounding context before the model answers. This
+  keeps answers anchored to canon and reduces hallucinations. (Note: this
+  is prompt-side RAG, not LLM function/tool calling.)
+- **UI** — [`src/components/LucasChatModal.tsx`](src/components/LucasChatModal.tsx)
+  is a fullscreen modal in the same Imperial-CRT visual language as the
+  rest of the site (red/steel palette, scanlines, Orbitron/VT323 typography).
+
+### Running the chat locally
+
+1. Create a free account on [Groq Console](https://console.groq.com/) and
+   generate an API key.
+2. Configure it server-side (the browser never sees the key):
+
+    ```bash
+    cp api/config.example.php api/config.php
+    # edit api/config.php → set GROQ_API_KEY = 'gsk_...'
+    ```
+
+3. Make sure the PHP proxy in [`api/`](api/) is reachable at
+   `/api/groq.php`. In production it's served by Aruba's PHP runtime; in
+   local dev you can use the built-in PHP server alongside Vite:
+
+    ```bash
+    php -S localhost:8000 -t .
+    # then visit http://localhost:5173 — the proxy is at http://localhost:8000/api/groq.php
+    ```
+
+    Adjust the fetch URL in [`src/lib/groq.ts`](src/lib/groq.ts) if your
+    local setup differs.
+
+Without a valid `GROQ_API_KEY` the rest of the experience works normally —
+only the Holocron chat will return an error.
 
 ## Fonts
 

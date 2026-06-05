@@ -7,7 +7,7 @@ import { useAppStore } from '../store/useAppStore';
  * Scroll-driver per la fase 4 "Blueprint briefing".
  * Mappa lo scroll in `blueprintProgress` (0..1).
  *
- * Sub-finestre interpretate dal componente <BlueprintOverlay/>:
+ * Sub-finestre interpretate dal componente <BlueprintCRT/>:
  *   0.00 → 0.18  cala la "carta" dall'alto, mentre la fase 3
  *                (HoloRoom) shutdownt ed il puck affonda
  *   0.18 → 0.85  display: callouts che appaiono uno alla volta

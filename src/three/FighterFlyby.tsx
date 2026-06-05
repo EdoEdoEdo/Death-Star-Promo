@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { useAppStore } from '../store/useAppStore';
 import { audio } from '../lib/audio';
+import { isMobile } from '../lib/device';
 
 const extendLoader = (loader: any) => {
     loader.setMeshoptDecoder(MeshoptDecoder);
@@ -14,7 +15,14 @@ const XWING = import.meta.env.BASE_URL + 'models/x_wing_opt.glb';
 const TIE = import.meta.env.BASE_URL + 'models/tieln_fighter_opt.glb';
 const FALCON = import.meta.env.BASE_URL + 'models/millenium_falcon_HD_opt.glb';
 const SDESTROYER = import.meta.env.BASE_URL + 'models/star_destroyer_opt.glb';
-const SHUTTLE = import.meta.env.BASE_URL + 'models/star_wars_imperial_shuttle_opt.glb';
+const SHUTTLE =
+    import.meta.env.BASE_URL + 'models/star_wars_imperial_shuttle_opt.glb';
+
+// Su mobile saltiamo i 3 modelli più pesanti (Falcon HD 2.3MB,
+// Shuttle 2.3MB, Star Destroyer 1.1MB → ~5.7MB risparmiati di
+// download + VRAM + draw calls). Restano X-wing e TIE per la
+// dogfight iconica con i laser.
+const LOAD_HEAVY_SHIPS = !isMobile;
 
 const processed = new WeakSet<THREE.Object3D>();
 
@@ -98,10 +106,13 @@ function falconPathAt(t: number, out: THREE.Vector3) {
 
 // Sequenza con respiro: ogni nave ha un gap dopo per dare aria.
 // X-wing+TIE → (gap) → Falcon → (gap) → Shuttle → (gap) → Star Destroyer
-const X_WIN_START = 0.03;
-const X_WIN_END = 0.2;
-const TIE_WIN_START = 0.08;
-const TIE_WIN_END = 0.25;
+// Su mobile (niente Falcon/Shuttle/SD) allunghiamo le finestre della
+// dogfight del 50% per occupare piu' scroll: con Lenis le 150vh che
+// avrebbero senza extension si esaurirebbero in pochi swipe.
+const X_WIN_START = isMobile ? 0.05 : 0.03;
+const X_WIN_END = isMobile ? 0.3 : 0.2;
+const TIE_WIN_START = isMobile ? 0.1 : 0.08;
+const TIE_WIN_END = isMobile ? 0.35 : 0.25;
 // Falcon hero shot
 const FALCON_WIN_START = 0.32;
 const FALCON_WIN_END = 0.5;
@@ -144,8 +155,8 @@ function sdPathAt(t: number, out: THREE.Vector3) {
 const LASER_COUNT = 4;
 const LASER_LIFE_SP = 0.05;
 const LASER_LENGTH = 0.7;
-const LASER_FIRE_START = 0.1;
-const LASER_FIRE_END = 0.2;
+const LASER_FIRE_START = isMobile ? 0.15 : 0.1;
+const LASER_FIRE_END = isMobile ? 0.28 : 0.2;
 // spSpawn evenly spaced nella finestra utile (lascia LASER_LIFE_SP alla fine).
 const LASER_SPAWN_SPS: number[] = Array.from(
     { length: LASER_COUNT },
@@ -156,6 +167,12 @@ const LASER_SPAWN_SPS: number[] = Array.from(
 );
 
 export default function FighterFlyby() {
+    // Su mobile saltiamo COMPLETAMENTE il flyby: niente modelli, niente
+    // useFrame, niente download GLB, niente audio triggers. iPhone 12/13
+    // mini non reggevano il combo Bloom fullscreen + 2 navi animate.
+    // La scena reveal su mobile diventa solo l'avvicinamento della DS.
+    if (isMobile) return null;
+
     const xRef = useRef<THREE.Group>(null);
     const tieRef = useRef<THREE.Group>(null);
     const falconRef = useRef<THREE.Group>(null);
@@ -177,20 +194,22 @@ export default function FighterFlyby() {
         undefined,
         extendLoader,
     );
+    // Su mobile riusiamo la cache di XWING come placeholder (zero download
+    // extra) per rispettare le regole degli hook senza caricare i GLB heavy.
     const { scene: falconScene } = useGLTF(
-        FALCON,
+        LOAD_HEAVY_SHIPS ? FALCON : XWING,
         undefined,
         undefined,
         extendLoader,
     );
     const { scene: sdScene } = useGLTF(
-        SDESTROYER,
+        LOAD_HEAVY_SHIPS ? SDESTROYER : XWING,
         undefined,
         undefined,
         extendLoader,
     );
     const { scene: shuttleScene } = useGLTF(
-        SHUTTLE,
+        LOAD_HEAVY_SHIPS ? SHUTTLE : XWING,
         undefined,
         undefined,
         extendLoader,
@@ -198,17 +217,28 @@ export default function FighterFlyby() {
 
     const xwing = useMemo(() => xScene.clone(true), [xScene]);
     const tie = useMemo(() => tieScene.clone(true), [tieScene]);
-    const falcon = useMemo(() => falconScene.clone(true), [falconScene]);
-    const sd = useMemo(() => sdScene.clone(true), [sdScene]);
-    const shuttle = useMemo(() => shuttleScene.clone(true), [shuttleScene]);
+    const falcon = useMemo(
+        () => (LOAD_HEAVY_SHIPS ? falconScene.clone(true) : null),
+        [falconScene],
+    );
+    const sd = useMemo(
+        () => (LOAD_HEAVY_SHIPS ? sdScene.clone(true) : null),
+        [sdScene],
+    );
+    const shuttle = useMemo(
+        () => (LOAD_HEAVY_SHIPS ? shuttleScene.clone(true) : null),
+        [shuttleScene],
+    );
 
     useEffect(() => {
         normalize(xwing, 2.0);
         normalize(tie, 1.7);
-        normalize(falcon, 7);
-        normalize(sd, 26);
-        normalize(shuttle, 3.2);
-        tuneFalconMaterials(falcon);
+        if (falcon) {
+            normalize(falcon, 7);
+            tuneFalconMaterials(falcon);
+        }
+        if (sd) normalize(sd, 26);
+        if (shuttle) normalize(shuttle, 3.2);
     }, [xwing, tie, falcon, sd, shuttle]);
 
     const tmp = useRef(new THREE.Vector3());
@@ -241,7 +271,27 @@ export default function FighterFlyby() {
     const shuttleAudioRef = useRef<HTMLAudioElement | null>(null);
 
     useFrame(({ clock }) => {
-        const sp = useAppStore.getState().sceneProgress;
+        const state = useAppStore.getState();
+        const sp = state.sceneProgress;
+        // Early-out totale quando il flyby non è in scena: una volta che
+        // superlaser/hyperspace/hologram/lightsaber sono partiti, l'intera
+        // fase reveal è alle spalle e non serve aggiornare nulla. Risparmia
+        // l'intero useFrame nelle sezioni successive (cruciale su mobile).
+        const offReveal =
+            state.superlaserProgress > 0 ||
+            state.hyperspaceProgress > 0 ||
+            state.hologramProgress > 0 ||
+            state.lightsaberProgress > 0;
+        if (offReveal) {
+            // Assicurati che tutte le navi siano nascoste (in caso di salto
+            // di sezione via menu) e fermati subito.
+            if (xRef.current) xRef.current.visible = false;
+            if (tieRef.current) tieRef.current.visible = false;
+            if (falconRef.current) falconRef.current.visible = false;
+            if (sdRef.current) sdRef.current.visible = false;
+            if (shuttleRef.current) shuttleRef.current.visible = false;
+            return;
+        }
         const xg = xRef.current;
         const tg = tieRef.current;
         if (!xg || !tg) return;
@@ -554,22 +604,28 @@ export default function FighterFlyby() {
                 il glow del motore integrato, quindi non aggiungiamo
                 light/sphere/trail extra. Lo ruotiamo di 180° su Z per
                 raddrizzarlo (il modello nasce sottosopra). */}
-            <group ref={falconRef} visible={false}>
-                <group rotation={[Math.PI, Math.PI, Math.PI]}>
-                    <primitive object={falcon} />
+            {falcon && (
+                <group ref={falconRef} visible={false}>
+                    <group rotation={[Math.PI, Math.PI, Math.PI]}>
+                        <primitive object={falcon} />
+                    </group>
+                    {/* engine glow rimosso per ora */}
                 </group>
-                {/* engine glow rimosso per ora */}
-            </group>
+            )}
 
             {/* Star Destroyer — imponente, low-pass R→L. */}
-            <group ref={sdRef} visible={false}>
-                <primitive object={sd} />
-            </group>
+            {sd && (
+                <group ref={sdRef} visible={false}>
+                    <primitive object={sd} />
+                </group>
+            )}
 
             {/* Imperial Shuttle Lambda — entry left, banking sopra. */}
-            <group ref={shuttleRef} visible={false}>
-                <primitive object={shuttle} />
-            </group>
+            {shuttle && (
+                <group ref={shuttleRef} visible={false}>
+                    <primitive object={shuttle} />
+                </group>
+            )}
 
             {/* Pool laser TIE: due bolt rossi paralleli, orientati lungo
                 la direzione di tiro (group.lookAt → -Z punta al target,
@@ -622,8 +678,13 @@ export default function FighterFlyby() {
     );
 }
 
-useGLTF.preload(XWING, undefined, undefined, extendLoader);
-useGLTF.preload(TIE, undefined, undefined, extendLoader);
-useGLTF.preload(FALCON, undefined, undefined, extendLoader);
-useGLTF.preload(SDESTROYER, undefined, undefined, extendLoader);
-useGLTF.preload(SHUTTLE, undefined, undefined, extendLoader);
+// Su mobile FighterFlyby ritorna null: nessun preload utile.
+if (!isMobile) {
+    useGLTF.preload(XWING, undefined, undefined, extendLoader);
+    useGLTF.preload(TIE, undefined, undefined, extendLoader);
+}
+if (LOAD_HEAVY_SHIPS) {
+    useGLTF.preload(FALCON, undefined, undefined, extendLoader);
+    useGLTF.preload(SDESTROYER, undefined, undefined, extendLoader);
+    useGLTF.preload(SHUTTLE, undefined, undefined, extendLoader);
+}

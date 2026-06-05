@@ -54,12 +54,17 @@ const HYPERSPACE_KEYS: Key[] = [
 // (centrato in origine, puck a y=0, ologramma a y≈1.4-2.5) e fa
 // un lentissimo orbit. lookAt punta poco sopra il puck per centrare
 // il modello olografico.
+// Su mobile la HoloRoom e' scalata a 0.78 (HOLO_SCALE in HoloRoom.tsx):
+// l'ologramma vive intorno a y≈1.1 invece di 1.4 → camera target piu'
+// basso per mantenerlo centrato nel viewport.
+const HOLO_LOOK_Y = isMobile ? 1.1 : 1.4;
+const HOLO_CAM_Y = isMobile ? 1.1 : 1.4;
 const HOLOGRAM_KEYS: Key[] = [
     { p: 0.0, pos: [0, 0, 18], look: [0, 0, 0] },
-    { p: 0.08, pos: [0, 1.4, 5.5], look: [0, 1.4, 0] },
-    { p: 0.5, pos: [3.0, 1.6, 4.6], look: [0, 1.4, 0] },
-    { p: 0.95, pos: [-2.5, 1.4, 5.0], look: [0, 1.4, 0] },
-    { p: 1.0, pos: [-2.5, 1.4, 5.0], look: [0, 1.4, 0] },
+    { p: 0.08, pos: [0, HOLO_CAM_Y, 5.5], look: [0, HOLO_LOOK_Y, 0] },
+    { p: 0.5, pos: [3.0, HOLO_CAM_Y + 0.2, 4.6], look: [0, HOLO_LOOK_Y, 0] },
+    { p: 0.95, pos: [-2.5, HOLO_CAM_Y, 5.0], look: [0, HOLO_LOOK_Y, 0] },
+    { p: 1.0, pos: [-2.5, HOLO_CAM_Y, 5.0], look: [0, HOLO_LOOK_Y, 0] },
 ];
 
 // Lightsaber section: la camera è in tre-quarti davanti all'elsa, leggermente
@@ -217,7 +222,24 @@ function RevealApproach({ dsRef }: { dsRef: React.RefObject<THREE.Group> }) {
         }
         let zPos: number;
         let scl: number;
-        if (sp < 0.82) {
+        if (isMobile) {
+            // MOBILE — niente flyby di navi (FighterFlyby disattivato).
+            // La sezione e' solo l'avvicinamento della Morte Nera, in
+            // due fasi pulite su 400vh totali (~250vh approach, ~150vh climax).
+            //  0.00 → 0.75 : avvicinamento da z=-60 a z=-10 (scale 0.22→0.7)
+            //  0.75 → 1.00 : climax da z=-10 a z=0 (scale 0.7→1)
+            if (sp < 0.75) {
+                const t = THREE.MathUtils.clamp(sp / 0.75, 0, 1);
+                const ease = t * t * (3 - 2 * t);
+                zPos = THREE.MathUtils.lerp(-60, -10, ease);
+                scl = THREE.MathUtils.lerp(0.22, 0.7, ease);
+            } else {
+                const t = THREE.MathUtils.clamp((sp - 0.75) / 0.25, 0, 1);
+                const ease = 1 - Math.pow(1 - t, 3);
+                zPos = THREE.MathUtils.lerp(-10, 0, ease);
+                scl = THREE.MathUtils.lerp(0.7, 1, ease);
+            }
+        } else if (sp < 0.82) {
             // Fase 1: lontana → media (z: -80 → -22, scale 0.18 → 0.5)
             const t = THREE.MathUtils.clamp(sp / 0.82, 0, 1);
             const ease = t * t * (3 - 2 * t);
@@ -298,13 +320,20 @@ export default function Scene() {
     return (
         <div className="fixed inset-0 -z-0 pointer-events-none">
             <Canvas
-                dpr={isMobile ? [1, 1.2] : [1, 1.6]}
+                // DPR=1 fisso su mobile: il Retina 2x/3x quadruplica i pixel
+                // da shadare dal Bloom fullscreen → enorme guadagno fillrate.
+                dpr={isMobile ? 1 : [1, 1.6]}
+                // performance.min: R3F abbassa automaticamente DPR fino a
+                // questa soglia quando il framerate cala (auto-regression).
+                performance={{ min: 0.5 }}
                 gl={{
                     antialias: !isMobile,
                     alpha: true,
                     powerPreference: 'high-performance',
                     toneMapping: THREE.ACESFilmicToneMapping,
                     toneMappingExposure: 1.15,
+                    // Stencil/depth non servono → meno banda su tile-based GPU.
+                    stencil: false,
                 }}
                 camera={{ fov: 38, position: [0, 0, 22], near: 0.1, far: 600 }}
             >
@@ -330,28 +359,30 @@ export default function Scene() {
                 />
 
                 <Suspense fallback={null}>
-                    {/* Cielo stellato denso. Shell radius=50 ± 15 →
-                        distanza dalla camera (z=22) ~28..78, sempre
-                        davanti al fog (near=80). */}
+                    {/* Cielo stellato. Su mobile un SOLO layer più piccolo:
+                        il secondo layer ravvicinato ha enorme overdraw col
+                        bloom attivo (ogni Point passa anche dal compositore). */}
                     <group ref={starsRef}>
                         <Stars
                             radius={50}
                             depth={30}
-                            count={isMobile ? 2500 : 6000}
+                            count={isMobile ? 1200 : 6000}
                             factor={3.5}
                             saturation={0}
                             fade
                             speed={0.2}
                         />
-                        <Stars
-                            radius={28}
-                            depth={12}
-                            count={isMobile ? 900 : 2200}
-                            factor={1.8}
-                            saturation={0}
-                            fade
-                            speed={0.6}
-                        />
+                        {!isMobile && (
+                            <Stars
+                                radius={28}
+                                depth={12}
+                                count={2200}
+                                factor={1.8}
+                                saturation={0}
+                                fade
+                                speed={0.6}
+                            />
+                        )}
                     </group>
                     {/* Environment rimosso temporaneamente per favorire un
                         terminator più netto sulla DS-1. */}
@@ -375,12 +406,14 @@ export default function Scene() {
                     DS/ships/blade/holo risultano quasi invisibili contro
                     lo sfondo navy. Vignette via su mobile per risparmiare. */}
                 {isMobile ? (
-                    <EffectComposer>
+                    <EffectComposer multisampling={0} enableNormalPass={false}>
                         <Bloom
-                            intensity={0.6}
-                            luminanceThreshold={0.45}
-                            luminanceSmoothing={0.3}
+                            intensity={0.55}
+                            luminanceThreshold={0.55}
+                            luminanceSmoothing={0.25}
                             mipmapBlur={false}
+                            // kernelSize più piccolo = meno tap nello shader.
+                            kernelSize={1}
                         />
                     </EffectComposer>
                 ) : (

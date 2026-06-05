@@ -10,10 +10,16 @@ import {
 import { BlendFunction } from 'postprocessing';
 import * as THREE from 'three';
 import { useAppStore } from '../store/useAppStore';
+import { isMobile } from '../lib/device';
 
 // GLB originale non compresso (2 MB) per evitare problemi di meshopt
 // decoding in alcuni browser. Per il loader la dimensione va benissimo.
 const VADER = import.meta.env.BASE_URL + 'models/vader_helmet_opt.glb';
+
+// Su mobile l'aspect ratio molto verticale fa sembrare il casco enorme:
+// scaliamo del 18% (2.646 -> 2.17) per dare aria ai bordi e lasciare
+// piu' spazio sotto per la barra di progresso.
+const VADER_TARGET_SIZE = isMobile ? 2.17 : 2.646;
 
 // WeakSet a livello modulo: tracciamo le scene già normalizzate per
 // evitare di rifare center+scale in StrictMode (mount/unmount/remount).
@@ -62,8 +68,9 @@ function VaderHelmet() {
         const preBox = new THREE.Box3().setFromObject(scene);
         const preSize = preBox.getSize(new THREE.Vector3());
         const maxDim = Math.max(preSize.x, preSize.y, preSize.z) || 1;
-        // 5.04 - 30% = 3.528, poi -25% = 2.646
-        scene.scale.setScalar(2.646 / maxDim);
+        // 5.04 - 30% = 3.528, poi -25% = 2.646 (desktop)
+        // Mobile: -18% ulteriore (vedi VADER_TARGET_SIZE in cima al file)
+        scene.scale.setScalar(VADER_TARGET_SIZE / maxDim);
 
         // Ora che è scalato, calcoliamo il centro nello spazio mondo e
         // lo sottraiamo dalla posizione della scena.
