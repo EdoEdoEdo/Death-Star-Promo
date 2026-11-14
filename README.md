@@ -55,17 +55,6 @@ npm run typecheck      # tsc -b (kept out of `build` on purpose)
 npm run build          # → dist/
 ```
 
-## Deploy (Aruba)
-
-1. `npm run build`, then upload the **contents** of `dist/` to
-   `www.edoedoedo.it/experiments/death-star-promo/`.
-2. Upload `api/groq.php`, `api/.htaccess`, `api/.cache/.htaccess` and
-   `api/config.example.php` into `death-star-promo/api/`.
-   Keep your existing `api/config.php` (set `GROQ_MODEL` to
-   `openai/gpt-oss-120b`; a retired model is replaced automatically anyway).
-3. `api/.cache/` must be writable by PHP (rate limit + SWAPI cache). If it
-   is not, the proxy falls back to the system temp folder.
-
 ## How it works
 
 ### Scroll → progress → scene
