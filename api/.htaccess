@@ -1,0 +1,7 @@
+# Blocca l'accesso diretto a configurazione (chiave API) e cache del proxy.
+<Files "config.php">
+Require all denied
+</Files>
+<Files "config.example.php">
+Require all denied
+</Files>

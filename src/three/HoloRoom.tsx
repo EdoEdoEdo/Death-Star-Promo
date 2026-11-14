@@ -1,24 +1,20 @@
 import { useLayoutEffect, useMemo, useRef } from 'react';
 import { useGLTF } from '@react-three/drei';
-import { useFrame } from '@react-three/fiber';
+import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
-import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { useAppStore } from '../store/useAppStore';
 import { audio } from '../lib/audio';
-import { isMobile } from '../lib/device';
+import { tier } from '../lib/device';
+import { MODELS, CREW_MODELS, extendLoader } from '../lib/assets';
+import { useWarmUp } from './useWarmUp';
+import { applyEnv, getStudioEnv } from './envMap';
 
-const extendLoader = (loader: any) => {
-    loader.setMeshoptDecoder(MeshoptDecoder);
-};
-
-// Scala globale della stanza olografica: su mobile il viewport e' stretto
-// e il modello+puck+beam riempivano lo schermo invadendo la card di testo
-// sotto. Riducendo l'intero gruppo (puck, beam, ologramma, rim glow) di
-// ~22% la composizione resta identica ma piu' compatta.
-const HOLO_SCALE = isMobile ? 0.78 : 1;
+// Scala della stanza: uguale ovunque. In verticale ci pensa il CameraRig
+// (camera piu' lontana), quindi niente piu' scala ridotta su mobile.
+const HOLO_SCALE = 1;
 
 // ───────────────────────── Modelli ─────────────────────────
-const PUCK = import.meta.env.BASE_URL + 'models/holo-puck_opt.glb';
+const PUCK = MODELS.puck;
 // NOTA: lo Stormtrooper TK-736N è rigged (skinned mesh). Il nostro
 // ShaderMaterial non include la pipeline skinning, quindi la mesh
 // va in bind-pose smontata. Lo abbiamo escluso per ora; per usarlo
@@ -31,36 +27,13 @@ type Slot = {
     rotationFix?: [number, number, number];
 };
 const SLOTS: Slot[] = [
-    {
-        url: import.meta.env.BASE_URL + 'models/storm_trooper_opt.glb',
-        scale: 1.6,
-        yOffset: 0,
-    },
-    {
-        url: import.meta.env.BASE_URL + 'models/k2so_opt.glb',
-        scale: 1.7,
-        yOffset: 0,
-    },
-    {
-        url:
-            import.meta.env.BASE_URL +
-            'models/r5-j2_imperial_astromech_droid_opt.glb',
-        scale: 1.4,
-        yOffset: 0,
-    },
-    {
-        url: import.meta.env.BASE_URL + 'models/star_wars_mouse_droid_opt.glb',
-        scale: 0.9,
-        yOffset: 0,
-    },
-    {
-        url:
-            import.meta.env.BASE_URL +
-            'models/star_wars_b1_battle_droid_opt.glb',
-        scale: 1.6,
-        yOffset: 0,
-    },
+    { url: CREW_MODELS[0], scale: 1.6, yOffset: 0 },
+    { url: CREW_MODELS[1], scale: 1.7, yOffset: 0 },
+    { url: CREW_MODELS[2], scale: 1.4, yOffset: 0 },
+    { url: CREW_MODELS[3], scale: 0.9, yOffset: 0 },
+    { url: CREW_MODELS[4], scale: 1.6, yOffset: 0 },
 ];
+const SLOT_Y = 1.4;
 
 // Finestra di hologramProgress in cui ciclano i modelli
 const CYCLE_START = 0.1;
@@ -102,10 +75,14 @@ const HOLO_FRAG = /* glsl */ `
 uniform vec3 uColor;
 uniform float uTime;
 uniform float uOpacity;
+uniform float uScan;
 varying vec3 vPosition;
 varying vec3 vNormal;
 
 void main() {
+    // materializzazione: tutto cio' che sta sopra la scan line non c'e' ancora
+    if (vPosition.y > uScan) discard;
+    float scanEdge = 1.0 - smoothstep(0.0, 0.08, uScan - vPosition.y);
     vec3 normal = normalize(vNormal);
     if(!gl_FrontFacing) normal *= -1.0;
 
@@ -122,7 +99,8 @@ void main() {
     holographic += fresnel * 1.25;
     holographic *= falloff;
 
-    gl_FragColor = vec4(uColor, holographic * uOpacity);
+    vec3 col = uColor + vec3(0.6, 0.85, 1.0) * scanEdge * 2.5;
+    gl_FragColor = vec4(col, (holographic + scanEdge * 1.5) * uOpacity);
 }
 `;
 
@@ -135,6 +113,7 @@ function makeHoloMaterial(color: THREE.Color) {
             uColor: { value: color },
             uOpacity: { value: 1 },
             uGlitch: { value: 1 },
+            uScan: { value: 100 },
         },
         transparent: true,
         depthWrite: false,
@@ -217,6 +196,8 @@ function HoloSlot({
         });
     }, [scene, material, scale, rotationFix]);
 
+    useWarmUp(scene);
+
     useFrame(() => {
         materialRef.current = material;
         externalGroupRef.current = groupRef.current;
@@ -225,7 +206,7 @@ function HoloSlot({
     return (
         <group
             ref={groupRef}
-            position={[0, 1.4 + yOffset, 0]}
+            position={[0, SLOT_Y + yOffset, 0]}
             visible={visible}
         >
             <primitive object={scene} />
@@ -357,6 +338,17 @@ export default function HoloRoom() {
     // Stato beam per triggerare l'audio "holo-turn" sull'edge on/off.
     const beamOnRef = useRef(false);
     const { scene: puck } = useGLTF(PUCK, undefined, undefined, extendLoader);
+    const gl = useThree((s) => s.gl) as THREE.WebGLRenderer;
+    useWarmUp(puck);
+    const puckMats = useMemo(() => {
+        const out: THREE.MeshStandardMaterial[] = [];
+        puck.traverse((o) => {
+            const m = (o as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
+            if (m && 'emissive' in m) out.push(m);
+        });
+        return out;
+    }, [puck]);
+    const cyan = useMemo(() => new THREE.Color('#5fc8ff'), []);
 
     // Normalizza puck (centro alla base, scala max=1.6).
     // useLayoutEffect: applica scale prima del primo paint, altrimenti
@@ -378,7 +370,8 @@ export default function HoloRoom() {
         // Spinge il puck a y=0 (base appoggiata)
         const box2 = new THREE.Box3().setFromObject(puck);
         puck.position.y -= box2.min.y;
-    }, [puck]);
+        applyEnv(puck, getStudioEnv(gl), 0.4);
+    }, [puck, gl]);
 
     useFrame((state) => {
         const {
@@ -423,6 +416,10 @@ export default function HoloRoom() {
         // Spegnimento extra durante la transizione blueprint
         const bpFade = 1 - THREE.MathUtils.smoothstep(bp, 0.0, 0.15);
         beamOpacity.current = bootIn * shutdown * bpFade;
+        for (const m of puckMats) {
+            m.emissive.copy(cyan);
+            m.emissiveIntensity = beamOpacity.current * 0.6;
+        }
 
         // Audio holo-turn: trigger sull'edge on (0 -> >0.5) e off (>0.5 -> 0)
         // del beam, cosi' si sente sia in apertura che in chiusura senza
@@ -461,8 +458,11 @@ export default function HoloRoom() {
 
         // posizione locale dentro lo slot (0..1)
         const localT = (cycleT - activeIdx * slotSpan) / slotSpan;
-        // edge ramp: alpha = 1 nel core, sfuma di poco ai bordi.
-        const edge = 0.06;
+        // edge ramp corto: l'entrata/uscita la fa la scan line.
+        const edge = 0.03;
+        // scan line di materializzazione (dal basso) e smaterializzazione
+        const scanIn = THREE.MathUtils.smoothstep(localT, 0.0, 0.16);
+        const scanOut = THREE.MathUtils.smoothstep(localT, 0.88, 1.0);
         const edgeIn = THREE.MathUtils.smoothstep(localT, 0, edge);
         const edgeOut = 1 - THREE.MathUtils.smoothstep(localT, 1 - edge, 1);
         const activeAlpha = edgeIn * edgeOut;
@@ -480,6 +480,12 @@ export default function HoloRoom() {
                 mat.uniforms.uTime.value = t;
                 mat.uniforms.uOpacity.value = alpha * beamOpacity.current;
                 mat.uniforms.uGlitch.value = glitchBoost;
+                const half = SLOTS[i].scale / 2 + 0.06;
+                const y0 = (SLOT_Y - half) * HOLO_SCALE;
+                const y1 = (SLOT_Y + half) * HOLO_SCALE;
+                mat.uniforms.uScan.value = isActive
+                    ? y0 + (y1 - y0) * scanIn * (1 - scanOut)
+                    : y0;
             }
             // Visibilità e rotazione gestite centralmente: solo lo slot
             // attivo è visibile e ruota lentamente. Gli altri sono
@@ -530,19 +536,112 @@ export default function HoloRoom() {
                     visible
                 />
             ))}
-            {/* Soft glow ambient sotto il puck per ancorarlo */}
-            <pointLight
-                position={[0, 0.4, 0]}
-                color="#7fd1ff"
-                intensity={6}
-                distance={4}
-            />
+            {/* Pavimento olografico e pulviscolo nel cono (al posto della
+                point light, che ricompilava gli shader quando la stanza
+                diventava visibile) */}
+            <HoloFloor opacityRef={beamOpacity} />
+            <HoloDust opacityRef={beamOpacity} />
         </group>
     );
 }
 
-// Preload
-useGLTF.preload(PUCK, undefined, undefined, extendLoader);
-SLOTS.forEach((s) =>
-    useGLTF.preload(s.url, undefined, undefined, extendLoader),
-);
+// ───────────────────────── Pavimento e pulviscolo ─────────────────────────
+const FLOOR_FRAG = /* glsl */ `
+uniform float uOpacity;
+uniform float uTime;
+varying vec2 vUv;
+void main() {
+    vec2 p = (vUv - 0.5) * 2.0;
+    float r = length(p);
+    if (r > 1.0) discard;
+    float a = atan(p.y, p.x);
+    float rings = 1.0 - smoothstep(0.0, 0.035, abs(fract(r * 7.0 - uTime * 0.05) - 0.5) * 2.0 - 0.9);
+    float spokes = 1.0 - smoothstep(0.0, 0.02, abs(fract(a / 6.28318 * 24.0) - 0.5) * 2.0 - 0.94);
+    float fade = smoothstep(1.0, 0.25, r) * smoothstep(0.08, 0.2, r);
+    vec3 col = vec3(0.5, 0.82, 1.0);
+    gl_FragColor = vec4(col * (rings * 0.55 + spokes * 0.25) * fade * uOpacity, 1.0);
+}
+`;
+const PLANE_VERT = /* glsl */ `
+varying vec2 vUv;
+void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`;
+
+function HoloFloor({ opacityRef }: { opacityRef: React.MutableRefObject<number> }) {
+    const mat = useMemo(
+        () =>
+            new THREE.ShaderMaterial({
+                vertexShader: PLANE_VERT,
+                fragmentShader: FLOOR_FRAG,
+                uniforms: { uOpacity: { value: 0 }, uTime: { value: 0 } },
+                transparent: true,
+                depthWrite: false,
+                blending: THREE.AdditiveBlending,
+            }),
+        [],
+    );
+    useFrame((state) => {
+        mat.uniforms.uOpacity.value = opacityRef.current * 0.6;
+        mat.uniforms.uTime.value = state.clock.elapsedTime;
+    });
+    return (
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.01, 0]} material={mat}>
+            <planeGeometry args={[7, 7]} />
+        </mesh>
+    );
+}
+
+const DUST_COUNT = tier === 'high' ? 420 : 220;
+const DUST_VERT = /* glsl */ `
+attribute vec3 aSeed;
+uniform float uTime;
+uniform float uOpacity;
+varying float vAlpha;
+void main() {
+    float h = fract(aSeed.y + uTime * (0.04 + aSeed.z * 0.05));
+    float y = 0.15 + h * 2.4;
+    // dentro il cono: raggio che si allarga con l'altezza
+    float rad = mix(0.5, 1.2, h) * sqrt(aSeed.x);
+    float ang = aSeed.z * 6.28318 + uTime * 0.15 * (aSeed.x - 0.5);
+    vec3 pos = vec3(cos(ang) * rad, y, sin(ang) * rad);
+    vec4 mv = modelViewMatrix * vec4(pos, 1.0);
+    gl_Position = projectionMatrix * mv;
+    gl_PointSize = (1.5 + aSeed.x * 2.0) * (6.0 / -mv.z);
+    vAlpha = uOpacity * sin(h * 3.14159) * (0.35 + aSeed.x * 0.65);
+}
+`;
+const DUST_FRAG = /* glsl */ `
+varying float vAlpha;
+void main() {
+    float d = length(gl_PointCoord - 0.5);
+    if (d > 0.5) discard;
+    gl_FragColor = vec4(vec3(0.6, 0.88, 1.0) * vAlpha * (1.0 - d * 2.0), 1.0);
+}
+`;
+
+function HoloDust({ opacityRef }: { opacityRef: React.MutableRefObject<number> }) {
+    const { geo, mat } = useMemo(() => {
+        const g = new THREE.BufferGeometry();
+        const seed = new Float32Array(DUST_COUNT * 3);
+        for (let i = 0; i < seed.length; i++) seed[i] = Math.random();
+        g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(DUST_COUNT * 3), 3));
+        g.setAttribute('aSeed', new THREE.BufferAttribute(seed, 3));
+        const m = new THREE.ShaderMaterial({
+            vertexShader: DUST_VERT,
+            fragmentShader: DUST_FRAG,
+            uniforms: { uTime: { value: 0 }, uOpacity: { value: 0 } },
+            transparent: true,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+        });
+        return { geo: g, mat: m };
+    }, []);
+    useFrame((state) => {
+        mat.uniforms.uTime.value = state.clock.elapsedTime;
+        mat.uniforms.uOpacity.value = opacityRef.current;
+    });
+    return <points geometry={geo} material={mat} frustumCulled={false} />;
+}

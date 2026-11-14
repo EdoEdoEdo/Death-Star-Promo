@@ -19,7 +19,7 @@ export default function MuteToggle() {
         <button
             onClick={() => audio.toggle()}
             aria-label={muted ? 'Enable sound' : 'Mute sound'}
-            className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 rounded-full border border-sith-red/40 bg-black/40 backdrop-blur-sm hover:border-sith-red hover:bg-sith-red/10 transition-colors text-[8px] sm:text-[10px] tracking-[0.2em] sm:tracking-[0.3em] text-sith-steel font-display whitespace-nowrap"
+            className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 rounded-full border border-sith-red/40 bg-black/40 backdrop-blur-sm hover:border-sith-red hover:bg-sith-red/10 transition-colors text-[10px] tracking-[0.22em] sm:tracking-[0.3em] text-sith-steel font-display whitespace-nowrap"
         >
             <span
                 className="inline-block h-1.5 w-1.5 rounded-full"

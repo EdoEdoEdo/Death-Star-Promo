@@ -5,7 +5,7 @@ export default {
         extend: {
             colors: {
                 sith: {
-                    black: '#05060a',
+                    black: '#03040a',
                     ink: '#0b0d14',
                     panel: '#10131c',
                     red: '#ff2a2a',
@@ -17,10 +17,9 @@ export default {
             fontFamily: {
                 crawl: ['"Pathway Gothic One"', 'Impact', 'sans-serif'],
                 jedi: ['"Star Jedi"', 'Impact', 'sans-serif'],
-                jediHollow: ['"Star Jedi Hollow"', 'Impact', 'sans-serif'],
-                jediSe: ['"Star Jedi SE"', 'Impact', 'sans-serif'],
                 display: ['Orbitron', 'system-ui', 'sans-serif'],
                 body: ['Inter', 'system-ui', 'sans-serif'],
+                mono: ['"Share Tech Mono"', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
             },
             boxShadow: {
                 saber: '0 0 20px rgba(255,42,42,0.7), 0 0 60px rgba(255,82,82,0.45)',

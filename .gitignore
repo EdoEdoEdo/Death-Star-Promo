@@ -1,0 +1,8 @@
+node_modules
+dist
+*.local
+.DS_Store
+tsconfig.tsbuildinfo
+# chiave API e cache del proxy PHP (mai nel repo)
+api/config.php
+api/.cache/

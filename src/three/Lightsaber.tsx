@@ -1,17 +1,15 @@
 import { useLayoutEffect, useMemo, useRef } from 'react';
 import { useGLTF } from '@react-three/drei';
-import { useFrame } from '@react-three/fiber';
+import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
-import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { useAppStore } from '../store/useAppStore';
 import { audio } from '../lib/audio';
+import { MODELS, extendLoader } from '../lib/assets';
+import { saberLight } from './sceneRefs';
+import { useWarmUp } from './useWarmUp';
+import { applyEnv, getStudioEnv } from './envMap';
 
-const extendLoader = (loader: any) => {
-    loader.setMeshoptDecoder(MeshoptDecoder);
-};
-
-const LIGHTSABER_URL =
-    import.meta.env.BASE_URL + 'models/darth_vader_lightsaber_opt.glb';
+const LIGHTSABER_URL = MODELS.saber;
 
 // ──────────────────────────────────────────────────────────────
 // PARAMETRI TUNABILI
@@ -47,9 +45,9 @@ const HUM_FREQ_A = 24;
 const HUM_FREQ_B = 41;
 const HUM_AMP = 0.05;
 
-// Luci dinamiche (illuminano il manico e l'ambiente)
-const POINTLIGHT_NEAR_INTENSITY = 6;
-const POINTLIGHT_FAR_INTENSITY = 4;
+// Luce dinamica della lama: e' la point light globale di Scene.tsx
+// (sempre presente, a zero quando la lama e' spenta).
+const POINTLIGHT_INTENSITY = 8;
 
 // Slide-in / ignition (lightsaberProgress 0..1)
 const SLIDE_FROM: [number, number] = [0, -12];
@@ -95,8 +93,7 @@ export default function Lightsaber() {
     const tipCoreRef = useRef<THREE.Mesh>(null);
     const tipHaloRef = useRef<THREE.Mesh>(null);
     const emitterFlareRef = useRef<THREE.Mesh>(null);
-    const lightARef = useRef<THREE.PointLight>(null);
-    const lightBRef = useRef<THREE.PointLight>(null);
+    const lightPos = useRef(new THREE.Vector3());
 
     const { scene: hilt } = useGLTF(
         LIGHTSABER_URL,
@@ -104,6 +101,9 @@ export default function Lightsaber() {
         undefined,
         extendLoader,
     );
+
+    const gl = useThree((s) => s.gl) as THREE.WebGLRenderer;
+    useWarmUp(hilt);
 
     const matCore = useMemo(() => makeBladeMat(BLADE_CORE_COLOR_HDR), []);
     const matHalo = useMemo(() => makeBladeMat(BLADE_HALO_COLOR_HDR), []);
@@ -163,7 +163,9 @@ export default function Lightsaber() {
             if (Array.isArray(mat)) mat.forEach(dim);
             else dim(mat);
         });
-    }, [hilt]);
+        // cromature che riflettono qualcosa (prima: metallo senza ambiente = nero)
+        applyEnv(hilt, getStudioEnv(gl), 0.6);
+    }, [hilt, gl]);
 
     const bladeQuat = useMemo(
         () =>
@@ -196,8 +198,9 @@ export default function Lightsaber() {
             useAppStore.getState();
         const t = state.clock.getElapsedTime();
 
-        const show = bp >= 0.85;
+        const show = bp >= 0.9 || lp > 0;
         if (groupRef.current) groupRef.current.visible = show;
+        if (!show && saberLight.current) saberLight.current.intensity = 0;
         if (!show) {
             // Sezione non attiva: spegni tutto e re-arma
             if (sfxStateRef.current !== 'idle') {
@@ -354,20 +357,15 @@ export default function Lightsaber() {
 
         if (bladeRef.current) bladeRef.current.visible = ignite > 0.001;
 
-        // Pointlights lungo la lama (illuminazione reale del manico)
-        if (lightARef.current && lightBRef.current) {
-            const pA = bladeEmitter.current
-                .clone()
-                .add(bladeAxis.current.clone().multiplyScalar(len * 0.4));
-            const pB = bladeEmitter.current
-                .clone()
-                .add(bladeAxis.current.clone().multiplyScalar(len * 0.85));
-            lightARef.current.position.copy(pA);
-            lightBRef.current.position.copy(pB);
-            lightARef.current.intensity = POINTLIGHT_NEAR_INTENSITY * ignite;
-            lightBRef.current.intensity = POINTLIGHT_FAR_INTENSITY * ignite;
-            lightARef.current.visible = ignite > 0.01;
-            lightBRef.current.visible = ignite > 0.01;
+        // Luce rossa a meta' lama (illumina il manico): posizione in world
+        const light = saberLight.current;
+        if (light && tiltRef.current) {
+            lightPos.current
+                .copy(bladeEmitter.current)
+                .addScaledVector(bladeAxis.current, len * 0.45);
+            tiltRef.current.localToWorld(lightPos.current);
+            light.position.copy(lightPos.current);
+            light.intensity = POINTLIGHT_INTENSITY * ignite * (1 + hum * 2);
         }
 
         // Tilt fisso
@@ -457,34 +455,8 @@ export default function Lightsaber() {
                         </mesh>
                     </group>
 
-                    <pointLight
-                        ref={lightARef}
-                        color={'#ff2a1a'}
-                        intensity={0}
-                        distance={10}
-                        decay={2}
-                    />
-                    <pointLight
-                        ref={lightBRef}
-                        color={'#ff2a1a'}
-                        intensity={0}
-                        distance={7}
-                        decay={2}
-                    />
                 </group>
             </group>
-            <directionalLight
-                position={[3, 4, 5]}
-                intensity={0.9}
-                color="#fff5e6"
-            />
-            <directionalLight
-                position={[-4, -1, 2]}
-                intensity={0.25}
-                color="#7fb6ff"
-            />
         </group>
     );
 }
-
-useGLTF.preload(LIGHTSABER_URL, undefined, undefined, extendLoader);

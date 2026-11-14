@@ -3,16 +3,16 @@ import { askLucas, type ChatMessage } from '../lib/groq';
 import { useAppStore } from '../store/useAppStore';
 
 const SUGGESTIONS = [
+    'Is the DS-1 really worth one planet a month?',
     'Who was Anakin Skywalker, really?',
-    'Tell me about the planet Tatooine',
-    'How does the Force work?',
-    'Tell me about the Millennium Falcon',
+    'Tell me about the planet Alderaan',
+    'How fast is the Millennium Falcon?',
 ];
 
 /**
- * Modale chat con "Maestro Lucas".
- * Fullscreen blur backdrop + pannello centrato in stile terminale.
- * Powered by Groq (Llama 3.3) + SWAPI come knowledge base.
+ * Modale chat con Master Lucas.
+ * Pannello in stile terminale; le risposte compaiono "battute" a macchina.
+ * Groq (openai/gpt-oss-120b) + SWAPI lato server, via api/groq.php.
  */
 export default function LucasChatModal() {
     const open = useAppStore((s) => s.chatOpen);
@@ -28,6 +28,19 @@ export default function LucasChatModal() {
     const [input, setInput] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    // risposta in corso di "battitura": indice del messaggio e caratteri visibili
+    const [typing, setTyping] = useState<{ index: number; shown: number } | null>(null);
+
+    useEffect(() => {
+        if (!typing) return;
+        const full = messages[typing.index]?.content ?? '';
+        if (typing.shown >= full.length) {
+            setTyping(null);
+            return;
+        }
+        const id = window.setTimeout(() => setTyping({ index: typing.index, shown: Math.min(full.length, typing.shown + 4) }), 16);
+        return () => window.clearTimeout(id);
+    }, [typing, messages]);
     const scrollRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
 
@@ -50,9 +63,9 @@ export default function LucasChatModal() {
     useEffect(() => {
         scrollRef.current?.scrollTo({
             top: scrollRef.current.scrollHeight,
-            behavior: 'smooth',
+            behavior: typing ? 'auto' : 'smooth',
         });
-    }, [messages, loading]);
+    }, [messages, loading, typing]);
 
     async function send(text: string) {
         const trimmed = text.trim();
@@ -68,6 +81,7 @@ export default function LucasChatModal() {
         try {
             const reply = await askLucas(messages, trimmed);
             setMessages([...next, { role: 'assistant', content: reply }]);
+            setTyping({ index: next.length, shown: 0 });
         } catch (e) {
             setError(e instanceof Error ? e.message : 'Unknown error');
         } finally {
@@ -86,12 +100,12 @@ export default function LucasChatModal() {
         >
             {/* Backdrop */}
             <div
-                className="absolute inset-0 bg-black/70 backdrop-blur-xl"
+                className="absolute inset-0 bg-black/75 backdrop-blur-md"
                 onClick={closeChat}
             />
 
             {/* Panel terminal-style */}
-            <div className="relative z-10 w-full max-w-3xl h-[80vh] md:h-[78vh] rounded-2xl border border-sith-red/40 bg-black/85 shadow-[0_0_60px_rgba(255,34,48,0.25)] overflow-hidden flex flex-col">
+            <div className="relative z-10 w-full max-w-3xl h-[85svh] md:h-[78vh] rounded-2xl border border-sith-red/40 bg-black/85 shadow-[0_0_60px_rgba(255,34,48,0.25)] overflow-hidden flex flex-col">
                 {/* Title bar */}
                 <div className="flex items-center justify-between px-5 py-3 border-b border-white/10 bg-gradient-to-b from-white/5 to-transparent">
                     <div className="flex items-center gap-3">
@@ -100,8 +114,8 @@ export default function LucasChatModal() {
                             <span className="w-2.5 h-2.5 rounded-full bg-sith-gold/70" />
                             <span className="w-2.5 h-2.5 rounded-full bg-emerald-400/70" />
                         </div>
-                        <span className="font-display text-[10px] tracking-[0.4em] text-sith-steel/70">
-                            HOLOCRON // MASTER_LUCAS.exe
+                        <span className="font-display text-[11px] tracking-[0.22em] sm:tracking-[0.36em] text-sith-steel/70 whitespace-nowrap">
+                            HOLOCRON · MASTER LUCAS
                         </span>
                     </div>
                     <button
@@ -132,15 +146,15 @@ export default function LucasChatModal() {
                             >
                                 {m.role === 'assistant' && (
                                     <div className="font-display text-[10px] tracking-[0.3em] text-sith-gold mb-1">
-                                        $ MASTER_LUCAS
+                                        MASTER LUCAS
                                     </div>
                                 )}
                                 {m.role === 'user' && (
                                     <div className="font-display text-[10px] tracking-[0.3em] text-sith-red/80 mb-1">
-                                        $ APPRENTICE
+                                        YOU
                                     </div>
                                 )}
-                                {m.content}
+                                {typing && typing.index === i ? m.content.slice(0, typing.shown) : m.content}
                             </div>
                         </div>
                     ))}
@@ -169,7 +183,7 @@ export default function LucasChatModal() {
                             key={s}
                             onClick={() => send(s)}
                             disabled={loading}
-                            className="text-xs px-3 py-1.5 rounded-full bg-white/5 hover:bg-sith-red/20 border border-white/10 text-sith-steel/80 hover:text-white transition disabled:opacity-50"
+                            className="text-[12px] px-3 py-1.5 rounded-full bg-white/5 hover:bg-sith-red/20 border border-white/10 text-sith-steel/80 hover:text-white transition disabled:opacity-50"
                         >
                             {s}
                         </button>
@@ -191,13 +205,14 @@ export default function LucasChatModal() {
                         ref={inputRef}
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
-                        placeholder="Ask the Master something..."
-                        className="flex-1 bg-transparent border-b border-white/10 focus:border-sith-red/60 px-1 py-2 text-sm text-white placeholder:text-sith-steel/40 focus:outline-none font-mono"
+                        maxLength={600}
+                        placeholder="Ask Master Lucas anything about the galaxy…"
+                        className="flex-1 min-w-0 bg-transparent border-b border-white/10 focus:border-sith-red/60 px-1 py-2 text-base sm:text-sm text-white placeholder:text-sith-steel/40 focus:outline-none font-mono"
                     />
                     <button
                         type="submit"
                         disabled={loading || !input.trim()}
-                        className="btn-sith rounded-full px-5 py-2 text-xs font-display tracking-[0.2em] disabled:opacity-40"
+                        className="rounded-full px-5 py-2 text-xs font-display tracking-[0.2em] border border-sith-red/40 text-sith-red-glow hover:border-sith-red hover:text-white hover:shadow-[0_0_18px_rgba(255,42,42,0.45)] transition disabled:opacity-40"
                     >
                         SEND
                     </button>

@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { gsap } from 'gsap';
 import { useAppStore } from '../store/useAppStore';
 import { audio } from '../lib/audio';
+import { CHAPTERS, chapterIndex, pad2 } from '../lib/chapters';
+import { scrollToId } from '../lib/scroll';
 
 /**
  * Menu fullscreen con wipe verticale dall'alto verso il basso.
@@ -13,15 +15,8 @@ import { audio } from '../lib/audio';
  * Suono:     riusa `blu-turn` (gia' precaricato in App.tsx).
  */
 
-type NavItem = { id: string; label: string };
-
-const NAV: NavItem[] = [
-    { id: 'reveal', label: 'REVEAL' },
-    { id: 'feat-superlaser', label: 'SUPERLASER' },
-    { id: 'feat-hologram', label: 'CREW' },
-    { id: 'feat-blueprint', label: 'SCHEMATIC' },
-    { id: 'feat-lightsaber', label: 'IGNITE' },
-];
+// Le voci vengono da lib/chapters (stessa numerazione della cornice HUD).
+const NAV = CHAPTERS.slice(1);
 
 export default function FullscreenMenu() {
     const menuOpen = useAppStore((s) => s.menuOpen);
@@ -34,26 +29,20 @@ export default function FullscreenMenu() {
     const itemsRef = useRef<HTMLUListElement>(null);
     const footerRef = useRef<HTMLDivElement>(null);
 
-    // Sezione attualmente in vista: aggiornata sempre, anche a menu chiuso.
-    const [activeId, setActiveId] = useState<string>(NAV[0].id);
+    // Capitolo attivo dallo store (prima: getBoundingClientRect su ogni
+    // sezione a ogni evento di scroll). Aggiorna il DOM direttamente.
+    const itemsActiveRef = useRef(-1);
     useEffect(() => {
-        const sections = NAV.map((n) => document.getElementById(n.id)).filter(
-            (el): el is HTMLElement => !!el,
-        );
-        if (!sections.length) return;
-        const onScroll = () => {
-            // Sezione attiva = quella il cui top ha superato metà viewport.
-            const mid = window.innerHeight * 0.4;
-            let current = sections[0].id;
-            for (const sec of sections) {
-                const r = sec.getBoundingClientRect();
-                if (r.top <= mid) current = sec.id;
-            }
-            setActiveId(current);
+        const apply = (st: ReturnType<typeof useAppStore.getState>) => {
+            const idx = chapterIndex(st);
+            if (idx === itemsActiveRef.current) return;
+            itemsActiveRef.current = idx;
+            itemsRef.current?.querySelectorAll<HTMLElement>('[data-menu-item]').forEach((el, i) => {
+                el.dataset.active = i + 1 === idx ? '1' : '0';
+            });
         };
-        onScroll();
-        window.addEventListener('scroll', onScroll, { passive: true });
-        return () => window.removeEventListener('scroll', onScroll);
+        apply(useAppStore.getState());
+        return useAppStore.subscribe(apply);
     }, []);
 
     // animazione apertura / chiusura
@@ -154,14 +143,11 @@ export default function FullscreenMenu() {
         };
     }, [menuOpen, closeMenu]);
 
+    // Salto immediato mentre il pannello copre ancora lo schermo, poi
+    // chiusura: niente sezioni intermedie che scorrono a velocita' folle.
     const goTo = (id: string) => {
-        closeMenu();
-        // Lascia chiudere il menu, poi scrolla.
-        window.setTimeout(() => {
-            const el = document.getElementById(id);
-            if (!el) return;
-            el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }, 250);
+        scrollToId(id, true);
+        window.setTimeout(() => closeMenu(), 60);
     };
 
     return (
@@ -196,7 +182,7 @@ export default function FullscreenMenu() {
                 <div className="absolute bottom-6 right-6 h-6 w-6 border-r border-b border-sith-red/60" />
 
                 {/* Header label */}
-                <div className="absolute top-8 left-1/2 -translate-x-1/2 whitespace-nowrap text-[8px] sm:text-[11px] tracking-[0.3em] sm:tracking-[0.5em] text-sith-red/80 font-display">
+                <div className="absolute top-8 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] sm:text-[11px] tracking-[0.3em] sm:tracking-[0.5em] text-sith-red/80 font-display">
                     // IMPERIAL NAVIGATION
                 </div>
 
@@ -231,31 +217,24 @@ export default function FullscreenMenu() {
                 <nav className="absolute inset-0 flex items-center justify-center px-6">
                     <ul
                         ref={itemsRef}
-                        className="flex flex-col items-center gap-4 sm:gap-6 text-center"
+                        className="flex flex-col items-center gap-3 sm:gap-5 text-center"
                     >
-                        {NAV.map((item, i) => {
-                            const isActive = item.id === activeId;
-                            return (
-                                <li key={item.id} data-menu-item>
-                                    <button
-                                        onClick={() => goTo(item.id)}
-                                        className={`group inline-flex items-baseline gap-4 font-crawl text-3xl sm:text-5xl md:text-6xl tracking-tight transition-colors ${isActive ? 'text-sith-red' : 'text-sith-steel/90 hover:text-sith-red'}`}
-                                    >
-                                        <span
-                                            className={`text-[10px] sm:text-xs tracking-[0.4em] tabular-nums font-display ${isActive ? 'text-sith-red' : 'text-sith-red/70'}`}
-                                        >
-                                            {String(i + 1).padStart(2, '0')}
-                                        </span>
-                                        <span className="relative">
-                                            {item.label}
-                                            <span
-                                                className={`absolute left-0 -bottom-1 h-[2px] bg-sith-red transition-all duration-300 ${isActive ? 'w-full' : 'w-0 group-hover:w-full'}`}
-                                            />
-                                        </span>
-                                    </button>
-                                </li>
-                            );
-                        })}
+                        {NAV.map((item, i) => (
+                            <li key={item.id} data-menu-item data-active="0" className="menu-item">
+                                <button
+                                    onClick={() => goTo(item.anchor)}
+                                    className="group inline-flex items-baseline gap-4 font-crawl text-3xl sm:text-5xl md:text-6xl tracking-tight transition-colors text-sith-steel/90 hover:text-sith-red"
+                                >
+                                    <span className="text-[11px] sm:text-xs tracking-[0.4em] tabular-nums font-display text-sith-red/70">
+                                        {pad2(i + 1)}
+                                    </span>
+                                    <span className="relative">
+                                        {item.label}
+                                        <span className="menu-underline absolute left-0 -bottom-1 h-[2px] bg-sith-red transition-all duration-300 w-0 group-hover:w-full" />
+                                    </span>
+                                </button>
+                            </li>
+                        ))}
                     </ul>
                 </nav>
 
@@ -277,7 +256,7 @@ export default function FullscreenMenu() {
                                 boxShadow: '0 0 12px 2px rgba(255,32,64,0.7)',
                             }}
                         />
-                        OPEN HOLOCRON
+                        ASK MASTER LUCAS
                     </button>
                 </div>
             </div>

@@ -1,232 +1,402 @@
 /**
- * AudioManager — singleton per controllare tutti i suoni del sito.
+ * AudioManager — Web Audio API.
  *
- * Pattern:
- *  - `load()` registra un audio (con opzioni loop/preload).
- *  - `setVolume(id, vol)` modula in tempo reale (per ambient legati allo scroll).
- *    Avvia automaticamente la riproduzione la prima volta che vol > 0.
- *  - `trigger(id, vol)` spara un one-shot (clona il nodo per overlap).
- *  - Globale `muted` (default true): rispetto autoplay browser.
- *    Va sbloccato da una user gesture (es. click su "ENGAGE" del loader).
+ * Perche' Web Audio e non piu' HTMLAudioElement:
+ *  - su iOS `HTMLAudioElement.volume` e' in sola lettura: tutte le
+ *    dissolvenze legate allo scroll diventavano acceso/spento a volume
+ *    pieno. Qui ogni suono passa da un GainNode, che funziona ovunque;
+ *  - un solo AudioContext sbloccato su ENGAGE: niente "priming" di 19
+ *    elementi audio e niente coro di suoni rilasciati tutti insieme;
+ *  - loop nativi con loopStart/loopEnd (niente timeupdate + rewind).
+ *
+ * Gli effetti brevi vengono decodificati in AudioBuffer a 32 kHz (memoria
+ * contenuta). La marcia imperiale (3 minuti) resta in streaming tramite
+ * un <audio> collegato al grafo con MediaElementAudioSourceNode.
+ *
+ * API compatibile con la versione precedente:
+ *   load / setVolume / trigger / unmute / mute / toggle / isMuted /
+ *   subscribe / setMasterVolume  (+ warm() per gli asset differiti).
  */
-import { isMobile } from './device';
 
-interface SoundEntry {
-    audio: HTMLAudioElement;
-    loop: boolean;
-    targetVolume: number;
-    loopStart?: number;
-    loopEnd?: number;
+/** One-shot in riproduzione: volume modulabile e stop. */
+export interface Voice {
+    volume: number;
+    pause(): void;
 }
 
+type LoadOpts = {
+    loop?: boolean;
+    loopStart?: number;
+    loopEnd?: number;
+    /** 'stream' = HTMLAudioElement nel grafo (file lunghi). */
+    mode?: 'buffer' | 'stream';
+    /** false = scarica solo quando si chiama warm(). Default true. */
+    eager?: boolean;
+};
+
+type Entry = {
+    id: string;
+    src: string;
+    opts: LoadOpts;
+    target: number;
+    applied: number;
+    gain: GainNode | null;
+    source: AudioBufferSourceNode | null;
+    stopTimer: number | null;
+    // stream
+    el: HTMLAudioElement | null;
+    elNode: MediaElementAudioSourceNode | null;
+};
+
+type Ctor = typeof AudioContext;
+const AC: Ctor | undefined =
+    typeof window !== 'undefined'
+        ? window.AudioContext ||
+          (window as unknown as { webkitAudioContext?: Ctor })
+              .webkitAudioContext
+        : undefined;
+
+const DECODE_RATE = 32000;
+
 class AudioManager {
-    private sounds = new Map<string, SoundEntry>();
+    private ctx: AudioContext | null = null;
+    private master: GainNode | null = null;
+    private entries = new Map<string, Entry>();
+    private buffers = new Map<string, Promise<AudioBuffer | null>>();
+    private ready = new Map<string, AudioBuffer>();
+    private decoder: OfflineAudioContext | null = null;
     private muted = true;
     private masterVolume = 1;
     private listeners = new Set<() => void>();
+    private suspendTimer: number | null = null;
 
-    load(
-        id: string,
-        src: string,
-        opts: {
-            loop?: boolean;
-            preload?: boolean;
-            /** Per audio in loop: limita il loop a [loopStart..loopEnd] (sec). */
-            loopStart?: number;
-            loopEnd?: number;
-        } = {},
-    ) {
-        if (this.sounds.has(id)) return;
-        const audio = new Audio(src);
-        audio.loop = opts.loop ?? false;
-        audio.preload = opts.preload === false ? 'none' : 'auto';
-        audio.volume = 0;
-
-        // Se loopStart/loopEnd sono specificati, gestisci il rewind manuale:
-        // - quando currentTime supera loopEnd, riporta a loopStart
-        // - quando partiamo per la prima volta, vai a loopStart
-        if (opts.loop && (opts.loopStart != null || opts.loopEnd != null)) {
-            const start = opts.loopStart ?? 0;
-            const end = opts.loopEnd ?? Infinity;
-            // disabilita il loop nativo: lo gestiamo noi
-            audio.loop = false;
-            const onTime = () => {
-                if (audio.currentTime >= end) {
-                    try {
-                        audio.currentTime = start;
-                    } catch {
-                        /* ignora */
-                    }
-                }
-            };
-            audio.addEventListener('timeupdate', onTime);
-            // se l'audio finisce nativamente prima di end, ripeti dal start
-            audio.addEventListener('ended', () => {
-                try {
-                    audio.currentTime = start;
-                    audio.play().catch(() => {});
-                } catch {
-                    /* ignora */
-                }
+    constructor() {
+        if (typeof document !== 'undefined') {
+            document.addEventListener('visibilitychange', () => {
+                if (!this.ctx) return;
+                if (document.hidden) this.ctx.suspend().catch(() => {});
+                else if (!this.muted) this.ctx.resume().catch(() => {});
             });
         }
-
-        this.sounds.set(id, {
-            audio,
-            loop: opts.loop ?? false,
-            targetVolume: 0,
-            loopStart: opts.loopStart,
-            loopEnd: opts.loopEnd,
-        });
     }
 
-    /** Modula il volume e avvia/ferma la riproduzione automaticamente. */
-    setVolume(id: string, vol: number) {
-        const entry = this.sounds.get(id);
-        if (!entry) return;
-        const clamped = Math.max(0, Math.min(1, vol));
-        entry.targetVolume = clamped;
-        const effective = this.muted ? 0 : clamped * this.masterVolume;
-        entry.audio.volume = effective;
+    // ───────────────────────── caricamento ─────────────────────────
 
-        if (entry.loop) {
-            // Loop ambient: avvia se vol > 0, lascia in pausa se 0.
-            if (effective > 0.001 && entry.audio.paused) {
-                // Se ha un loopStart e currentTime e' fuori range, riposiziona.
-                if (
-                    entry.loopStart != null &&
-                    (entry.audio.currentTime < entry.loopStart ||
-                        (entry.loopEnd != null &&
-                            entry.audio.currentTime >= entry.loopEnd))
-                ) {
-                    try {
-                        entry.audio.currentTime = entry.loopStart;
-                    } catch {
-                        /* ignora */
+    load(id: string, src: string, opts: LoadOpts = {}) {
+        if (this.entries.has(id)) return;
+        const entry: Entry = {
+            id,
+            src,
+            opts,
+            target: 0,
+            applied: -1,
+            gain: null,
+            source: null,
+            stopTimer: null,
+            el: null,
+            elNode: null,
+        };
+        this.entries.set(id, entry);
+        if (opts.mode === 'stream') {
+            // creato subito: il browser inizia a bufferizzare durante
+            // l'intro; viene collegato al grafo e avviato su unmute().
+            if (typeof Audio !== 'undefined') {
+                const el = new Audio();
+                el.crossOrigin = 'anonymous';
+                el.preload = 'auto';
+                el.loop = !!opts.loop;
+                el.src = src;
+                entry.el = el;
+            }
+        } else if (opts.eager !== false) {
+            this.fetch(src);
+        }
+    }
+
+    /** Scarica gli effetti registrati con eager:false. */
+    warm() {
+        for (const e of this.entries.values()) {
+            if (e.opts.mode !== 'stream') this.fetch(e.src);
+        }
+    }
+
+    private getDecoder() {
+        if (this.decoder) return this.decoder;
+        try {
+            this.decoder = new OfflineAudioContext(2, 1, DECODE_RATE);
+        } catch {
+            this.decoder = null;
+        }
+        return this.decoder;
+    }
+
+    private fetch(src: string) {
+        if (this.buffers.has(src)) return this.buffers.get(src)!;
+        const p = fetch(src)
+            .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(r.status)))
+            .then((data) => {
+                const dec = this.getDecoder() ?? this.ctx;
+                if (!dec) return null;
+                return dec.decodeAudioData(data);
+            })
+            .then((buf) => {
+                if (buf) {
+                    this.ready.set(src, buf);
+                    // un loop gia' richiesto prima che il buffer fosse pronto
+                    for (const e of this.entries.values()) {
+                        if (e.src === src && e.opts.loop) this.apply(e, true);
                     }
                 }
-                entry.audio.play().catch(() => {});
-            } else if (effective < 0.001 && !entry.audio.paused) {
-                entry.audio.pause();
+                return buf;
+            })
+            .catch(() => null);
+        this.buffers.set(src, p);
+        return p;
+    }
+
+    // ───────────────────────── grafo ─────────────────────────
+
+    private ensureCtx(): AudioContext | null {
+        if (this.ctx) return this.ctx;
+        if (!AC) return null;
+        try {
+            const ctx = new AC();
+            const master = ctx.createGain();
+            master.gain.value = 0;
+            // compressore leggero: esplosione + allarme + marcia insieme non clippano
+            const comp = ctx.createDynamicsCompressor();
+            comp.threshold.value = -10;
+            comp.knee.value = 12;
+            comp.ratio.value = 3;
+            comp.attack.value = 0.005;
+            comp.release.value = 0.25;
+            master.connect(comp);
+            comp.connect(ctx.destination);
+            this.ctx = ctx;
+            this.master = master;
+        } catch {
+            this.ctx = null;
+        }
+        return this.ctx;
+    }
+
+    private entryGain(e: Entry): GainNode | null {
+        if (e.gain) return e.gain;
+        const ctx = this.ctx;
+        if (!ctx || !this.master) return null;
+        const g = ctx.createGain();
+        g.gain.value = 0;
+        g.connect(this.master);
+        e.gain = g;
+        return g;
+    }
+
+    private startLoop(e: Entry) {
+        const ctx = this.ctx;
+        // anche con il context ancora 'suspended' (resume() e' asincrono):
+        // la sorgente parte appena il context torna in esecuzione.
+        if (!ctx || e.source) return;
+        const gain = this.entryGain(e);
+        if (!gain) return;
+        if (e.opts.mode === 'stream') {
+            if (!e.el) return;
+            e.el.play().catch(() => {});
+            return;
+        }
+        const buf = this.ready.get(e.src);
+        if (!buf) return;
+        const src = ctx.createBufferSource();
+        src.buffer = buf;
+        src.loop = true;
+        const ls = Math.min(e.opts.loopStart ?? 0, buf.duration - 0.05);
+        const le = Math.min(e.opts.loopEnd ?? buf.duration, buf.duration);
+        src.loopStart = Math.max(0, ls);
+        src.loopEnd = le > ls ? le : buf.duration;
+        src.connect(gain);
+        src.start(0, src.loopStart);
+        e.source = src;
+    }
+
+    private stopLoop(e: Entry) {
+        if (e.opts.mode === 'stream') {
+            e.el?.pause();
+            return;
+        }
+        if (!e.source) return;
+        try {
+            e.source.stop();
+        } catch {
+            /* gia' fermato */
+        }
+        e.source.disconnect();
+        e.source = null;
+    }
+
+    /** Applica il volume target di un loop (con smoothing). */
+    private apply(e: Entry, force = false) {
+        const ctx = this.ctx;
+        if (!ctx || this.muted) return;
+        const v = e.target;
+        if (!force && Math.abs(v - e.applied) < 0.002) return;
+        e.applied = v;
+        const gain = this.entryGain(e);
+        if (!gain) return;
+        const now = ctx.currentTime;
+        if (v > 0.001) {
+            if (e.stopTimer != null) {
+                window.clearTimeout(e.stopTimer);
+                e.stopTimer = null;
+            }
+            this.startLoop(e);
+            gain.gain.cancelScheduledValues(now);
+            gain.gain.setTargetAtTime(v, now, 0.05);
+        } else {
+            gain.gain.cancelScheduledValues(now);
+            gain.gain.setTargetAtTime(0, now, 0.08);
+            if (e.stopTimer == null && (e.source || e.el)) {
+                e.stopTimer = window.setTimeout(() => {
+                    e.stopTimer = null;
+                    if (e.target <= 0.001) this.stopLoop(e);
+                }, 700);
             }
         }
     }
 
-    /** Spara un one-shot. Clona il nodo cosi' overlap multipli sono possibili.
-     *  Opzionalmente puo' partire da `start` (sec) e durare `duration` (sec). */
+    // ───────────────────────── API pubblica ─────────────────────────
+
+    /** Volume di un loop ambient (0..1). Avvia/ferma da solo. */
+    setVolume(id: string, vol: number) {
+        const e = this.entries.get(id);
+        if (!e) return;
+        e.target = Math.max(0, Math.min(1, vol));
+        if (e.opts.loop) this.apply(e);
+    }
+
+    /** One-shot. Overlap libero: ogni chiamata crea una sorgente nuova. */
     trigger(
         id: string,
         vol = 1,
         opts: { start?: number; duration?: number } = {},
-    ): HTMLAudioElement | null {
-        const entry = this.sounds.get(id);
-        if (!entry || this.muted) return null;
-        // iOS Safari: lo "sblocco" dato dal play() durante user gesture
-        // vale solo per l'HTMLAudioElement specifico. cloneNode() crea
-        // un nodo nuovo che NON eredita quel permesso -> play() fallisce
-        // silenzioso. Su mobile rinunciamo all'overlap e riusiamo il
-        // nodo originale (gia' primato in unmute()).
-        const clone = isMobile
-            ? entry.audio
-            : (entry.audio.cloneNode(true) as HTMLAudioElement);
-        if (isMobile) {
-            // Reset: il nodo potrebbe essere stato lasciato in pausa
-            // a metaá da un primer / trigger precedente.
-            clone.loop = false;
-            try {
-                clone.currentTime = 0;
-            } catch {
-                /* ignora */
-            }
-        } else {
-            clone.loop = false;
+    ): Voice | null {
+        const e = this.entries.get(id);
+        const ctx = this.ctx;
+        if (!e || !ctx || !this.master || this.muted) return null;
+        if (ctx.state !== 'running') return null;
+        const buf = this.ready.get(e.src);
+        if (!buf) {
+            this.fetch(e.src);
+            return null;
         }
-        clone.volume = Math.max(0, Math.min(1, vol)) * this.masterVolume;
-        const start = opts.start ?? 0;
-        if (start > 0) {
-            const setStart = () => {
+        const start = Math.min(opts.start ?? 0, Math.max(0, buf.duration - 0.05));
+        const maxDur = buf.duration - start;
+        const dur = Math.min(opts.duration ?? maxDur, maxDur);
+
+        const src = ctx.createBufferSource();
+        src.buffer = buf;
+        const env = ctx.createGain();
+        const fade = ctx.createGain();
+        env.gain.value = Math.max(0, Math.min(1, vol));
+        const t0 = ctx.currentTime;
+        const fadeLen = Math.min(0.4, dur * 0.25);
+        fade.gain.setValueAtTime(1, t0);
+        fade.gain.setValueAtTime(1, t0 + Math.max(0, dur - fadeLen));
+        fade.gain.linearRampToValueAtTime(0, t0 + dur);
+        src.connect(env);
+        env.connect(fade);
+        fade.connect(this.master);
+        src.start(t0, start, dur + 0.02);
+        let stopped = false;
+        src.onended = () => {
+            stopped = true;
+            src.disconnect();
+            env.disconnect();
+            fade.disconnect();
+        };
+
+        let current = env.gain.value;
+        return {
+            get volume() {
+                return current;
+            },
+            set volume(v: number) {
+                const c = Math.max(0, Math.min(1, v));
+                if (stopped || Math.abs(c - current) < 0.003) return;
+                current = c;
+                env.gain.setTargetAtTime(c, ctx.currentTime, 0.03);
+            },
+            pause() {
+                if (stopped) return;
+                stopped = true;
+                const now = ctx.currentTime;
+                env.gain.cancelScheduledValues(now);
+                env.gain.setTargetAtTime(0, now, 0.04);
                 try {
-                    clone.currentTime = start;
+                    src.stop(now + 0.2);
                 } catch {
-                    // ignora: alcuni browser richiedono metadata caricato
+                    /* gia' fermato */
                 }
-            };
-            if (clone.readyState >= 1) setStart();
-            else
-                clone.addEventListener('loadedmetadata', setStart, {
-                    once: true,
-                });
-        }
-        if (opts.duration && opts.duration > 0) {
-            const stopAt = start + opts.duration;
-            const fadeDur = Math.min(0.4, opts.duration * 0.25);
-            const fadeStart = stopAt - fadeDur;
-            const baseVol = clone.volume;
-            const onTime = () => {
-                const ct = clone.currentTime;
-                if (ct >= stopAt) {
-                    clone.pause();
-                    clone.removeEventListener('timeupdate', onTime);
-                } else if (ct >= fadeStart) {
-                    clone.volume =
-                        baseVol * Math.max(0, 1 - (ct - fadeStart) / fadeDur);
-                }
-            };
-            clone.addEventListener('timeupdate', onTime);
-        }
-        clone.play().catch(() => {});
-        return clone;
+            },
+        };
     }
 
+    /** Va chiamato DENTRO un gesto utente (click su ENGAGE / toggle). */
     unmute() {
-        if (!this.muted) return;
-        this.muted = false;
-        // Ri-applica i volumi target su tutti i loop attivi.
-        for (const [, entry] of this.sounds) {
-            if (entry.loop && entry.targetVolume > 0.001) {
-                entry.audio.volume = entry.targetVolume * this.masterVolume;
-                if (entry.audio.paused) {
-                    entry.audio.play().catch(() => {});
-                }
-            } else {
-                // iOS Safari/Chrome iOS richiedono che ogni
-                // HTMLAudioElement riceva un play() DURANTE il gesture
-                // utente per essere sbloccato. Senza, i loop ambient e
-                // i one-shot attivati piu' tardi dallo scroll restano
-                // muti silenziosamente (NotAllowedError), e in alcuni
-                // casi Chrome iOS li "rilascia" tutti insieme a un
-                // gesture successivo -> coro indesiderato.
-                //
-                // Primer SINCRONO: play() + pause() nello stesso tick.
-                // Il pause arriva prima che il browser produca audio.
-                // .muted = true e' un ulteriore safety net a livello
-                // driver. Non aspettiamo la promise di play() perche'
-                // su cache fredda potrebbe risolvere molto dopo, e nel
-                // mezzo il browser potrebbe iniziare a suonare.
-                const el = entry.audio;
-                const wasMuted = el.muted;
-                el.muted = true;
-                el.volume = 0;
-                try {
-                    const p = el.play();
-                    // Pause sincrono immediato. Su Chromium-based,
-                    // play() torna una Promise ma il media element e'
-                    // gia' in stato playing; pause() lo ferma subito.
-                    el.pause();
-                    try {
-                        el.currentTime = entry.loopStart ?? 0;
-                    } catch {
-                        /* ignora */
-                    }
-                    // Cattura la rejection per evitare unhandled promise.
-                    if (p && typeof p.catch === 'function') {
-                        p.catch(() => {});
-                    }
-                } catch {
-                    /* ignora errori di play sincroni */
-                }
-                el.muted = wasMuted;
+        const ctx = this.ensureCtx();
+        if (!ctx || !this.master) return;
+        // iOS 17+: ignora l'interruttore silenzioso come un player musicale
+        const nav = navigator as Navigator & {
+            audioSession?: { type: string };
+        };
+        if (nav.audioSession) {
+            try {
+                nav.audioSession.type = 'playback';
+            } catch {
+                /* non supportato */
             }
+        }
+        ctx.resume()
+            .then(() => {
+                if (this.muted) return;
+                for (const e of this.entries.values()) {
+                    if (e.opts.loop) this.apply(e, true);
+                }
+            })
+            .catch(() => {});
+        if (this.suspendTimer != null) {
+            window.clearTimeout(this.suspendTimer);
+            this.suspendTimer = null;
+        }
+        // stream: collegamento al grafo e primo play() dentro il gesto
+        for (const e of this.entries.values()) {
+            if (e.opts.mode === 'stream' && !e.elNode) {
+                if (!e.el) {
+                    const created = new Audio();
+                    created.crossOrigin = 'anonymous';
+                    created.preload = 'auto';
+                    created.loop = !!e.opts.loop;
+                    created.src = e.src;
+                    e.el = created;
+                }
+                const el = e.el;
+                try {
+                    e.elNode = ctx.createMediaElementSource(el);
+                    e.elNode.connect(this.entryGain(e)!);
+                } catch {
+                    e.elNode = null;
+                }
+                el.play()
+                    .then(() => {
+                        if (e.target <= 0.001) el.pause();
+                    })
+                    .catch(() => {});
+            }
+        }
+        this.muted = false;
+        const now = ctx.currentTime;
+        this.master.gain.cancelScheduledValues(now);
+        this.master.gain.setTargetAtTime(this.masterVolume, now, 0.08);
+        for (const e of this.entries.values()) {
+            if (e.opts.loop) this.apply(e, true);
         }
         this.notify();
     }
@@ -234,17 +404,29 @@ class AudioManager {
     mute() {
         if (this.muted) return;
         this.muted = true;
-        for (const [, entry] of this.sounds) {
-            entry.audio.volume = 0;
-            if (entry.loop && !entry.audio.paused) {
-                entry.audio.pause();
-            }
+        const ctx = this.ctx;
+        if (ctx && this.master) {
+            const now = ctx.currentTime;
+            this.master.gain.cancelScheduledValues(now);
+            this.master.gain.setTargetAtTime(0, now, 0.06);
+            this.suspendTimer = window.setTimeout(() => {
+                this.suspendTimer = null;
+                if (!this.muted) return;
+                for (const e of this.entries.values()) {
+                    if (e.opts.loop) {
+                        this.stopLoop(e);
+                        e.applied = -1;
+                    }
+                }
+                ctx.suspend().catch(() => {});
+            }, 400);
         }
         this.notify();
     }
 
     toggle() {
-        this.muted ? this.unmute() : this.mute();
+        if (this.muted) this.unmute();
+        else this.mute();
     }
 
     isMuted() {
@@ -253,17 +435,21 @@ class AudioManager {
 
     setMasterVolume(v: number) {
         this.masterVolume = Math.max(0, Math.min(1, v));
-        for (const [, entry] of this.sounds) {
-            entry.audio.volume = this.muted
-                ? 0
-                : entry.targetVolume * this.masterVolume;
+        if (this.ctx && this.master && !this.muted) {
+            this.master.gain.setTargetAtTime(
+                this.masterVolume,
+                this.ctx.currentTime,
+                0.08,
+            );
         }
     }
 
     /** Subscribe per re-render (es. icona mute). */
     subscribe(fn: () => void) {
         this.listeners.add(fn);
-        return () => this.listeners.delete(fn);
+        return () => {
+            this.listeners.delete(fn);
+        };
     }
 
     private notify() {

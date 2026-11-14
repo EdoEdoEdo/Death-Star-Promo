@@ -3,17 +3,20 @@ import Lenis from 'lenis';
 import { gsap } from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import { useAppStore } from '../store/useAppStore';
+import { setLenis } from '../lib/scroll';
 
 gsap.registerPlugin(ScrollTrigger);
+// Su mobile la barra degli indirizzi che compare/scompare cambia
+// l'altezza del viewport: senza questo ogni swipe ricalcolerebbe tutti
+// gli ScrollTrigger (scatti a meta' sezione).
+ScrollTrigger.config({ ignoreMobileResize: true });
 
 /**
  * Inizializza Lenis e lo collega a GSAP ScrollTrigger.
- * Da chiamare in un useEffect a livello di App.
  *
- * Mentre `loading` e' true (EngageScreen + Loader visibili) lo scroll
- * e' completamente bloccato: niente Lenis attivo, niente scroll nativo
- * (overflow:hidden sul body via classe). Cosi' l'utente non puo' "sbirciare"
- * sotto il loader ne' attivare ScrollTrigger prima del tempo.
+ * Mentre `loading` e' true (intro visibile) lo scroll e' bloccato:
+ * niente Lenis, overflow hidden sul body. Cosi' l'utente non puo'
+ * attivare gli ScrollTrigger prima del tempo.
  */
 export function useLenisScroll() {
     const setScrollProgress = useAppStore((s) => s.setScrollProgress);
@@ -21,7 +24,6 @@ export function useLenisScroll() {
 
     useEffect(() => {
         if (loading) {
-            // Blocco totale: scroll nativo off via CSS, Lenis non inizializzato.
             document.documentElement.classList.add('scroll-locked');
             document.body.classList.add('scroll-locked');
             return () => {
@@ -31,17 +33,15 @@ export function useLenisScroll() {
         }
 
         const lenis = new Lenis({
-            // Durata maggiore = scroll più "lungo"/inerzia più dolce.
-            duration: 1.8,
-            // ease-out più morbida (curva più piatta vs original)
-            easing: (t) => 1 - Math.pow(1 - t, 4),
+            // lerp al posto di duration: inerzia morbida ma reattiva
+            // (prima 1.8 s + wheelMultiplier 0.85: risposta lenta).
+            lerp: 0.085,
             smoothWheel: true,
-            // Moltiplicatore della rotella: <1 rallenta lo scroll della rotella
-            wheelMultiplier: 0.85,
-            // Touchpad/mobile leggermente più lento.
-            touchMultiplier: 1.4,
-            lerp: 0.08,
+            wheelMultiplier: 1,
+            // touch nativo su mobile (syncTouch off): niente lag del dito.
+            touchMultiplier: 1,
         });
+        setLenis(lenis);
 
         lenis.on('scroll', ScrollTrigger.update);
         lenis.on(
@@ -59,6 +59,7 @@ export function useLenisScroll() {
 
         return () => {
             gsap.ticker.remove(raf);
+            setLenis(null);
             lenis.destroy();
         };
     }, [setScrollProgress, loading]);

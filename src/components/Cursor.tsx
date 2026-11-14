@@ -43,31 +43,24 @@ export default function Cursor() {
         };
         gsap.ticker.add(tick);
 
-        const enter = () => {
-            scale = 2.4;
-            ring.classList.add('cursor-ring--hover');
+        // Delegazione: funziona anche con elementi montati dopo (CTA degli
+        // HUD, chat, menu). Prima i target venivano letti una volta sola.
+        const SEL = 'a, button, [data-cursor-hover]';
+        let hovering = false;
+        const onOver = (e: MouseEvent) => {
+            const hit = !!(e.target as Element | null)?.closest?.(SEL);
+            if (hit === hovering) return;
+            hovering = hit;
+            scale = hit ? 2.4 : 1;
+            ring.classList.toggle('cursor-ring--hover', hit);
         };
-        const leave = () => {
-            scale = 1;
-            ring.classList.remove('cursor-ring--hover');
-        };
-
-        const targets = document.querySelectorAll(
-            'a, button, [data-magnetic], [data-cursor-hover]',
-        );
-        targets.forEach((t) => {
-            t.addEventListener('mouseenter', enter);
-            t.addEventListener('mouseleave', leave);
-        });
+        window.addEventListener('mouseover', onOver, { passive: true });
 
         window.addEventListener('mousemove', onMove);
         return () => {
             window.removeEventListener('mousemove', onMove);
             gsap.ticker.remove(tick);
-            targets.forEach((t) => {
-                t.removeEventListener('mouseenter', enter);
-                t.removeEventListener('mouseleave', leave);
-            });
+            window.removeEventListener('mouseover', onOver);
         };
     }, [enabled]);
 

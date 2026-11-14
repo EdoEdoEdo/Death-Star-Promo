@@ -2,7 +2,15 @@ import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useAppStore } from '../store/useAppStore';
-import { audio } from '../lib/audio';
+import { audio, type Voice } from '../lib/audio';
+import { fx } from '../lib/fx';
+import {
+    EYE_CENTER,
+    BEAM_DIR,
+    FOCUS_POINT,
+    BEAM_MAX_LENGTH,
+    SL,
+} from './superlaserGeometry';
 
 /**
  * Superlaser della Morte Nera.
@@ -12,42 +20,28 @@ import { audio } from '../lib/audio';
  * punto focale parte il raggio principale (come ROTW / Episodio IV).
  *
  * Driver: `superlaserProgress` (0..1)
- *   0.00 - 0.05 : invisibile
- *   0.05 - 0.30 : convergenza — gli 8 raggi crescono dai bordi al focus
- *   0.25 - 0.38 : flash sul focus
- *   0.32 - 0.48 : il raggio principale si estende verso destra
- *   0.48 - 0.82 : raggio sostenuto
- *   0.82 - 1.00 : ritiro / chiusura
+ *   0.05 - 0.28 : convergenza — gli 8 raggi crescono dai bordi al focus
+ *   0.24 - 0.36 : flash sul focus
+ *   0.32 - 0.50 : il raggio principale corre fino al pianeta (impatto 0.50)
+ *   0.62 - 0.72 : la coda del raggio si stacca e lo segue verso il bersaglio
+ *   0.72 - 0.84 : i convergenti si ritirano
+ * Esplosione del pianeta: vedi Planet.tsx.
  */
 
 // ============================================================
-// PARAMETRI SUPERLASER — modifica qui per regolare geometria.
+// PARAMETRI SUPERLASER — la geometria condivisa (occhio, direzione,
+// punto focale, pianeta) e' in superlaserGeometry.ts.
 // ============================================================
-// Posizione del centro dell'occhio sulla superficie della Morte Nera.
-const EYE_CENTER = new THREE.Vector3(0, 0.45, 1.11);
-// Direzione di tiro: la NORMALE radiale uscente dal dish.
-// Questo garantisce che il focus point e il raggio principale siano
-// perfettamente allineati ("centrati") con l'asse dell'occhio.
-const BEAM_DIR = EYE_CENTER.clone().normalize();
 // Raggio del cerchio dei concentratori sul bordo esterno del dish.
-// Più ampio = base degli 8 raggi più larga.
 const DISH_RADIUS = 1;
-// Distanza del punto focale dal centro del dish, lungo BEAM_DIR.
-// Aumenta per portarlo più lontano dal modello (più esterno).
-const FOCUS_DISTANCE = 1;
-// Lunghezza MASSIMA dei raggi convergenti (dai bordi del dish verso
-// il focus). Indipendente da FOCUS_DISTANCE: usiamo questo per fare
-// in modo che gli 8 raggi siano "brevi sbuffi" che escono dal dish
-// e non collegamenti pieni fino al focus.
+// Lunghezza MASSIMA dei raggi convergenti (brevi sbuffi dal dish).
 const CONV_MAX_LENGTH = 3;
-// Posizione del punto focale (dove convergono gli 8 raggi e da cui
-// parte il raggio principale).
-const FOCUS_POINT = EYE_CENTER.clone().addScaledVector(
-    BEAM_DIR,
-    FOCUS_DISTANCE,
-);
 
 const N_BEAMS = 8;
+const BEAM_QUAT = new THREE.Quaternion().setFromUnitVectors(
+    new THREE.Vector3(0, 1, 0),
+    BEAM_DIR,
+);
 
 function easeInOut(t: number) {
     return t * t * (3 - 2 * t);
@@ -94,7 +88,9 @@ export default function Superlaser() {
 
     // Audio: triggered all'entrata della fase, envelope a campana sin(π·sp)
     const sfxTriggeredRef = useRef(false);
-    const sfxAudioRef = useRef<HTMLAudioElement | null>(null);
+    const sfxAudioRef = useRef<Voice | null>(null);
+    const firedRef = useRef(false);
+    const mainGlowRef = useRef<THREE.Mesh>(null);
 
     useFrame(() => {
         const sp = useAppStore.getState().superlaserProgress;
@@ -113,7 +109,7 @@ export default function Superlaser() {
             if (sfxAudioRef.current) {
                 // Envelope: cresce 0→0.3, sostiene 0.3→0.8, decresce 0.8→1
                 const env =
-                    smoothstep(0.02, 0.3, sp) * (1 - smoothstep(0.85, 1.0, sp));
+                    smoothstep(0.02, 0.3, sp) * (1 - smoothstep(0.66, 0.82, sp));
                 sfxAudioRef.current.volume = 0.7 * env;
             }
         } else if (sp <= 0.02) {
@@ -127,12 +123,20 @@ export default function Superlaser() {
             sfxAudioRef.current = null;
         }
 
+        // Colpo: piccolo shake quando parte il raggio principale.
+        if (sp >= SL.beamGrow[0] && !firedRef.current) {
+            firedRef.current = true;
+            fx.addShake(0.35);
+        } else if (sp < SL.beamGrow[0] - 0.02) {
+            firedRef.current = false;
+        }
+
         // --- Raggi convergenti -------------------------------------
-        // Crescono dai bordi del dish verso il focus point esterno.
-        // RETRAZIONE: ritardata (0.92..1.0) così spariscono DOPO il
-        // raggio principale.
+        // Crescono dai bordi del dish verso il focus; si ritirano DOPO
+        // il raggio principale.
         const tConv =
-            smoothstep(0.05, 0.3, sp) * (1 - smoothstep(0.92, 1.0, sp));
+            smoothstep(SL.convIn[0], SL.convIn[1], sp) *
+            (1 - smoothstep(SL.convOut[0], SL.convOut[1], sp));
         for (let i = 0; i < N_BEAMS; i++) {
             const core = convCoreRefs.current[i];
             const halo = convHaloRefs.current[i];
@@ -165,7 +169,8 @@ export default function Superlaser() {
         // --- Focus core --------------------------------------------
         // Resta acceso fino alla retrazione dei convergenti (0.92..1.0).
         const tFocus =
-            smoothstep(0.25, 0.38, sp) * (1 - smoothstep(0.92, 1.0, sp));
+            smoothstep(SL.focus[0], SL.focus[1], sp) *
+            (1 - smoothstep(SL.convOut[0], SL.convOut[1], sp));
         if (focusCoreRef.current) {
             focusCoreRef.current.visible = tFocus > 0.01;
             const s = 0.025 + tFocus * 0.015;
@@ -181,52 +186,42 @@ export default function Superlaser() {
         }
 
         // --- Raggio principale -------------------------------------
-        // Cresce da [0.32..0.48], sostenuto fino a 0.75, poi si
-        // ritira RAPIDAMENTE (0.75..0.88), prima dei convergenti.
-        const tBeamGrow = smoothstep(0.32, 0.48, sp);
-        const tBeamRetract = smoothstep(0.75, 0.88, sp);
-        const beamLen = (tBeamGrow - tBeamRetract) * 26;
+        // Segmento [tail..head] lungo BEAM_DIR a partire dal focus: la
+        // testa corre fino al pianeta, poi la coda si stacca e la segue
+        // (l'energia "parte" verso il bersaglio invece di ritirarsi).
+        const head = smoothstep(SL.beamGrow[0], SL.beamGrow[1], sp) * BEAM_MAX_LENGTH;
+        const tail = smoothstep(SL.beamRetract[0], SL.beamRetract[1], sp) * BEAM_MAX_LENGTH;
+        const beamLen = Math.max(0, head - tail);
         const visible = beamLen > 0.05;
-        const placeBeam = (mesh: THREE.Mesh, offset?: THREE.Vector3) => {
-            mesh.scale.set(mesh.scale.x, beamLen, mesh.scale.z);
-            const mid = FOCUS_POINT.clone().addScaledVector(
-                BEAM_DIR,
-                beamLen / 2,
-            );
-            if (offset) mid.add(offset);
-            mesh.position.copy(mid);
-            const q = new THREE.Quaternion().setFromUnitVectors(
-                new THREE.Vector3(0, 1, 0),
-                BEAM_DIR,
-            );
-            mesh.quaternion.copy(q);
+        const placeBeam = (mesh: THREE.Mesh) => {
+            mesh.scale.y = beamLen;
+            mesh.position
+                .copy(FOCUS_POINT)
+                .addScaledVector(BEAM_DIR, tail + beamLen / 2);
+            mesh.quaternion.copy(BEAM_QUAT);
         };
         if (mainRef.current) {
             mainRef.current.visible = visible;
-            if (visible) {
-                mainRef.current.scale.x = 1;
-                mainRef.current.scale.z = 1;
-                placeBeam(mainRef.current);
-            }
+            if (visible) placeBeam(mainRef.current);
         }
+        const flick = 0.85 + 0.15 * Math.sin(sp * 130) + 0.05 * Math.sin(sp * 47);
         if (mainHaloRef.current) {
             mainHaloRef.current.visible = visible;
             if (visible) {
-                // Leggero "respiro" sull'halo per dare vita.
                 const pulse = 1 + 0.08 * Math.sin(sp * 80);
                 mainHaloRef.current.scale.x = pulse;
                 mainHaloRef.current.scale.z = pulse;
                 placeBeam(mainHaloRef.current);
-                const m = mainHaloRef.current
-                    .material as THREE.MeshBasicMaterial;
-                if (m) {
-                    // micro-flicker per dare vibrazione energetica
-                    const flick =
-                        0.85 +
-                        0.15 * Math.sin(sp * 130) +
-                        0.05 * Math.sin(sp * 47);
-                    m.opacity = 0.5 * flick;
-                }
+                const m = mainHaloRef.current.material as THREE.MeshBasicMaterial;
+                if (m) m.opacity = 0.55 * flick;
+            }
+        }
+        if (mainGlowRef.current) {
+            mainGlowRef.current.visible = visible;
+            if (visible) {
+                placeBeam(mainGlowRef.current);
+                const m = mainGlowRef.current.material as THREE.MeshBasicMaterial;
+                if (m) m.opacity = 0.14 * flick;
             }
         }
     }, 1);
@@ -332,8 +327,19 @@ export default function Superlaser() {
 
             {/* Raggio principale: halo verde sottile + core bianco
                 sottile (entrambi orientati lungo BEAM_DIR via placeBeam). */}
+            <mesh ref={mainGlowRef}>
+                <cylinderGeometry args={[0.055, 0.055, 1, 16, 1, true]} />
+                <meshBasicMaterial
+                    color="#00ff44"
+                    toneMapped={false}
+                    transparent
+                    opacity={0}
+                    blending={THREE.AdditiveBlending}
+                    depthWrite={false}
+                />
+            </mesh>
             <mesh ref={mainHaloRef}>
-                <cylinderGeometry args={[0.035, 0.035, 1, 16]} />
+                <cylinderGeometry args={[0.026, 0.026, 1, 16, 1, true]} />
                 <meshBasicMaterial
                     color="#00ff44"
                     toneMapped={false}
@@ -344,7 +350,7 @@ export default function Superlaser() {
                 />
             </mesh>
             <mesh ref={mainRef}>
-                <cylinderGeometry args={[0.009, 0.009, 1, 16]} />
+                <cylinderGeometry args={[0.011, 0.011, 1, 16]} />
                 <meshBasicMaterial color="#9bff9b" toneMapped={false} />
             </mesh>
         </group>
